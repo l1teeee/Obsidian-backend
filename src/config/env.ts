@@ -28,4 +28,6 @@ export const env = {
   JWT_SECRET: required('JWT_SECRET'),
   JWT_REFRESH_SECRET: required('JWT_REFRESH_SECRET'),
   BCRYPT_ROUNDS: optionalInt('BCRYPT_ROUNDS', 10),
+  OPENAI_API_KEY: process.env['OPENAI_API_KEY'] ?? '',
+  OPENAI_MODEL:   process.env['OPENAI_MODEL']   ?? 'gpt-4o-mini',
 } as const;
