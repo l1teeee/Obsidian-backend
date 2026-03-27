@@ -1,4 +1,4 @@
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
@@ -31,9 +31,11 @@ function appError(errorCode: string, message: string, statusCode: number): Error
 
 function signTokens(userId: string, email: string): Omit<TokenPair, 'isFirstLogin'> {
   const accessToken = jwt.sign({ id: userId, email }, env.JWT_SECRET, {
+    algorithm: 'HS256',
     expiresIn: '15m',
   });
   const refreshToken = jwt.sign({ id: userId }, env.JWT_REFRESH_SECRET, {
+    algorithm: 'HS256',
     expiresIn: '7d',
   });
   return { accessToken, refreshToken };
@@ -103,7 +105,9 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   let payload: { id: string };
 
   try {
-    payload = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET) as { id: string };
+    payload = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET, {
+      algorithms: ['HS256'],
+    }) as { id: string };
   } catch (err) {
     if (err instanceof jwt.TokenExpiredError) {
       throw appError('TOKEN_EXPIRED', 'Refresh token has expired', 401);
@@ -117,7 +121,10 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   );
 
   if (tokenRows.length === 0) {
-    throw appError('INVALID_TOKEN', 'Refresh token not found or has been revoked', 401);
+    // Token is valid JWT but not in DB — either expired or already rotated.
+    // Treat as reuse attack: invalidate ALL sessions for this user.
+    await pool.query('DELETE FROM refresh_tokens WHERE user_id = ?', [payload.id]);
+    throw appError('INVALID_TOKEN', 'Refresh token has been revoked. Please log in again.', 401);
   }
 
   const [userRows] = await pool.query<UserRow[]>(

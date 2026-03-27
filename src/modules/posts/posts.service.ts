@@ -79,6 +79,11 @@ function deserializePost(row: PostRow): Post {
   };
 }
 
+/** Convert ISO 8601 string (e.g. "2026-03-28T15:15:00.000Z") to MySQL DATETIME format ("2026-03-28 15:15:00") */
+function toMysqlDatetime(iso: string): string {
+  return new Date(iso).toISOString().slice(0, 19).replace('T', ' ');
+}
+
 async function getById(id: string, userId: string): Promise<Post> {
   const [rows] = await pool.query<PostRow[]>(
     'SELECT * FROM posts WHERE id = ? AND user_id = ? LIMIT 1',
@@ -134,7 +139,7 @@ export async function createPost(userId: string, data: CreatePostData): Promise<
       data.post_type   ?? 'post',
       data.caption     ?? null,
       mediaUrlsJson,
-      data.scheduled_at ?? null,
+      data.scheduled_at ? toMysqlDatetime(data.scheduled_at) : null,
       data.status      ?? 'draft',
     ]
   );
@@ -151,7 +156,7 @@ export async function updatePost(id: string, userId: string, data: UpdatePostDat
   if (data.caption      !== undefined) { fields.push('caption = ?');      values.push(data.caption);      }
   if (data.media_urls   !== undefined) { fields.push('media_urls = ?');   values.push(JSON.stringify(data.media_urls)); }
   if (data.permalink    !== undefined) { fields.push('permalink = ?');    values.push(data.permalink);    }
-  if (data.scheduled_at !== undefined) { fields.push('scheduled_at = ?'); values.push(data.scheduled_at); }
+  if (data.scheduled_at !== undefined) { fields.push('scheduled_at = ?'); values.push(data.scheduled_at ? toMysqlDatetime(data.scheduled_at) : null); }
   if (data.published_at !== undefined) { fields.push('published_at = ?'); values.push(data.published_at); }
   if (data.status       !== undefined) { fields.push('status = ?');       values.push(data.status);       }
 

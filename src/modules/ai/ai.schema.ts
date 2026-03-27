@@ -13,11 +13,10 @@ export const generateImageSchema = {
 export const inspireSchema = {
   body: {
     type: 'object',
-    required: ['topic'],
     properties: {
       topic: {
         type: 'string',
-        minLength: 2,
+        minLength: 1,
         maxLength: 200,
       },
       platform: {
@@ -26,6 +25,27 @@ export const inspireSchema = {
       },
       workspaceId: {
         type: 'string',
+      },
+      imageUrls: {
+        type:     'array',
+        items:    { type: 'string', maxLength: 5_000_000 },  // supports data: base64
+        maxItems: 4,
+      },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
+export const suggestTimeSchema = {
+  body: {
+    type: 'object',
+    required: ['platforms'],
+    properties: {
+      caption:   { type: 'string', maxLength: 2200 },
+      platforms: {
+        type:     'array',
+        items:    { type: 'string', enum: ['meta', 'linkedin', 'youtube'] },
+        minItems: 1,
       },
     },
     additionalProperties: false,

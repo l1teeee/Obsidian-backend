@@ -1,5 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { generateCaptionSuggestions, generateImage } from './ai.service';
+import { generateCaptionSuggestions, generateImage, suggestScheduleTime } from './ai.service';
 
 interface GenerateImageBody {
   prompt: string;
@@ -15,18 +15,40 @@ export async function generateImageHandler(
 }
 
 interface InspireBody {
-  topic:        string;
+  topic?:       string;
   platform?:    string;
   workspaceId?: string;
+  imageUrls?:   string[];
 }
 
 export async function inspireHandler(
   request: FastifyRequest<{ Body: InspireBody }>,
   reply:   FastifyReply,
 ): Promise<void> {
-  const { topic, platform, workspaceId } = request.body;
+  const { topic, platform, workspaceId, imageUrls } = request.body;
 
-  const result = await generateCaptionSuggestions({ topic, platform, workspaceId });
+  if (!topic?.trim() && (!imageUrls || imageUrls.length === 0)) {
+    return reply.code(400).send({ success: false, error: 'Provide a topic or at least one image.' });
+  }
 
+  const result = await generateCaptionSuggestions({
+    topic, platform, workspaceId, imageUrls,
+    userId: request.user.id,
+  });
+
+  reply.code(200).send({ success: true, data: result });
+}
+
+interface SuggestTimeBody {
+  caption?:  string;
+  platforms: string[];
+}
+
+export async function suggestTimeHandler(
+  request: FastifyRequest<{ Body: SuggestTimeBody }>,
+  reply:   FastifyReply,
+): Promise<void> {
+  const { caption = '', platforms } = request.body;
+  const result = await suggestScheduleTime({ caption, platforms });
   reply.code(200).send({ success: true, data: result });
 }

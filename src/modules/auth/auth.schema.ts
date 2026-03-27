@@ -17,19 +17,12 @@ export const loginSchema = {
     required: ['email', 'password'],
     additionalProperties: false,
     properties: {
-      email: { type: 'string', format: 'email' },
-      password: { type: 'string', minLength: 1 },
+      email:      { type: 'string', format: 'email' },
+      password:   { type: 'string', minLength: 1 },
+      rememberMe: { type: 'boolean' },
     },
   },
 };
 
-export const refreshSchema = {
-  body: {
-    type: 'object',
-    required: ['refreshToken'],
-    additionalProperties: false,
-    properties: {
-      refreshToken: { type: 'string', minLength: 1 },
-    },
-  },
-};
+// Refresh token is read from the httpOnly cookie — no body required.
+export const refreshSchema = {};
