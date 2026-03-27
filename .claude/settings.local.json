@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Obsidian/Claude-brain/proyectos/**)",
+      "Read(//c/Obsidian/Claude-brain/diario/**)",
+      "Bash(while read:*)",
+      "Bash(do git:*)",
+      "Bash(sort -t'|' -k2 -rn)",
+      "mcp__nano-banana__get_configuration_status",
+      "mcp__nano-banana__generate_image",
+      "mcp___21st-dev_magic__21st_magic_component_inspiration",
+      "mcp___21st-dev_magic__21st_magic_component_builder",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(claude mcp:*)",
+      "mcp__stitch__list_projects",
+      "Bash(python:*)",
+      "mcp__stitch__list_screens",
+      "mcp__stitch__get_project",
+      "mcp__stitch__fetch_screen_image",
+      "mcp__stitch__fetch_screen_code",
+      "Bash(npx astro:*)",
+      "Bash(claude doctor:*)",
+      "Bash(node -e \"const p = require\\(''./node_modules/astro/package.json''\\); console.log\\(p.version\\)\")",
+      "Bash(grep -r \"from ''''astro:transitions''''\" node_modules/astro/dist/ --include=\"*.d.ts\")",
+      "Bash(xargs grep:*)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(k, '''':'''', json.dumps\\(v, indent=2\\)\\) for k,v in d.get\\(''''mcpServers'''',{}\\).items\\(\\) if ''''nano'''' in k.lower\\(\\) or ''''banana'''' in k.lower\\(\\)]\")",
+      "Bash(npx tsc:*)",
+      "Bash(python3 -c \":*)",
+      "Bash(git:*)",
+      "Bash(node -e \"require\\(''react-simple-maps''\\); console.log\\(''ok''\\)\")",
+      "Bash(npm i:*)",
+      "Bash(find /c/Proyects/obsidian-backend -type f -name * ! -path */node_modules/* ! -path */.idea/* ! -path */.claude/*)",
+      "Bash(npm list:*)",
+      "Bash(find /c/Proyects/obsidian-backend -maxdepth 1 -name .env* -o -name README* -o -name *.md)"
+    ]
+  }
+}
