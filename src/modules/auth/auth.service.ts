@@ -6,11 +6,12 @@ import { env } from '../../config/env';
 import { uid } from '../../lib/uid';
 
 interface UserRow extends RowDataPacket {
-  id:            string;
-  email:         string;
-  password_hash: string;
-  name:          string | null;
-  first_login:   number;
+  id:                string;
+  email:             string;
+  password_hash:     string;
+  name:              string | null;
+  first_login:       number;
+  profile_completed: number;
 }
 
 interface RefreshTokenRow extends RowDataPacket {
@@ -20,20 +21,24 @@ interface RefreshTokenRow extends RowDataPacket {
 }
 
 export interface TokenPair {
-  accessToken:  string;
-  refreshToken: string;
-  isFirstLogin: boolean;
+  accessToken:      string;
+  refreshToken:     string;
+  isFirstLogin:     boolean;
+  profileCompleted: boolean;
 }
 
 function appError(errorCode: string, message: string, statusCode: number): Error {
   return Object.assign(new Error(message), { errorCode, statusCode });
 }
 
-function signTokens(userId: string, email: string): Omit<TokenPair, 'isFirstLogin'> {
-  const accessToken = jwt.sign({ id: userId, email }, env.JWT_SECRET, {
-    algorithm: 'HS256',
-    expiresIn: '15m',
-  });
+// pc = profileCompleted baked into the access token so the frontend
+// can read it without an extra round-trip after every refresh.
+function signTokens(userId: string, email: string, profileCompleted: boolean): Omit<TokenPair, 'isFirstLogin' | 'profileCompleted'> {
+  const accessToken = jwt.sign(
+    { id: userId, email, pc: profileCompleted ? 1 : 0 },
+    env.JWT_SECRET,
+    { algorithm: 'HS256', expiresIn: '15m' },
+  );
   const refreshToken = jwt.sign({ id: userId }, env.JWT_REFRESH_SECRET, {
     algorithm: 'HS256',
     expiresIn: '7d',
@@ -45,18 +50,18 @@ async function storeRefreshToken(userId: string, token: string): Promise<void> {
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await pool.query<ResultSetHeader>(
     'INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (?, ?, ?)',
-    [userId, token, expiresAt]
+    [userId, token, expiresAt],
   );
 }
 
 export async function register(
   email: string,
   password: string,
-  name: string
+  name: string,
 ): Promise<TokenPair> {
   const [existing] = await pool.query<UserRow[]>(
     'SELECT id FROM users WHERE email = ? LIMIT 1',
-    [email]
+    [email],
   );
 
   if (existing.length > 0) {
@@ -68,19 +73,20 @@ export async function register(
 
   await pool.query<ResultSetHeader>(
     'INSERT INTO users (id, email, password_hash, name) VALUES (?, ?, ?, ?)',
-    [id, email, passwordHash, name]
+    [id, email, passwordHash, name],
   );
 
-  const tokens = signTokens(id, email);
+  // New users always start with profile_completed = 0
+  const tokens = signTokens(id, email, false);
   await storeRefreshToken(id, tokens.refreshToken);
 
-  return { ...tokens, isFirstLogin: true };
+  return { ...tokens, isFirstLogin: true, profileCompleted: false };
 }
 
 export async function login(email: string, password: string): Promise<TokenPair> {
   const [rows] = await pool.query<UserRow[]>(
-    'SELECT id, email, password_hash, first_login FROM users WHERE email = ? LIMIT 1',
-    [email]
+    'SELECT id, email, password_hash, first_login, profile_completed FROM users WHERE email = ? LIMIT 1',
+    [email],
   );
 
   const user = rows[0];
@@ -95,10 +101,11 @@ export async function login(email: string, password: string): Promise<TokenPair>
     throw appError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
   }
 
-  const tokens = signTokens(user.id, user.email);
+  const profileCompleted = Boolean(user.profile_completed);
+  const tokens = signTokens(user.id, user.email, profileCompleted);
   await storeRefreshToken(user.id, tokens.refreshToken);
 
-  return { ...tokens, isFirstLogin: Boolean(user.first_login) };
+  return { ...tokens, isFirstLogin: Boolean(user.first_login), profileCompleted };
 }
 
 export async function refresh(refreshToken: string): Promise<TokenPair> {
@@ -117,19 +124,17 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
 
   const [tokenRows] = await pool.query<RefreshTokenRow[]>(
     'SELECT id, user_id FROM refresh_tokens WHERE token = ? AND user_id = ? AND expires_at > NOW() LIMIT 1',
-    [refreshToken, payload.id]
+    [refreshToken, payload.id],
   );
 
   if (tokenRows.length === 0) {
-    // Token is valid JWT but not in DB — either expired or already rotated.
-    // Treat as reuse attack: invalidate ALL sessions for this user.
     await pool.query('DELETE FROM refresh_tokens WHERE user_id = ?', [payload.id]);
     throw appError('INVALID_TOKEN', 'Refresh token has been revoked. Please log in again.', 401);
   }
 
   const [userRows] = await pool.query<UserRow[]>(
-    'SELECT id, email FROM users WHERE id = ? LIMIT 1',
-    [payload.id]
+    'SELECT id, email, profile_completed FROM users WHERE id = ? LIMIT 1',
+    [payload.id],
   );
 
   const user = userRows[0];
@@ -140,10 +145,11 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
 
   await pool.query('DELETE FROM refresh_tokens WHERE token = ?', [refreshToken]);
 
-  const tokens = signTokens(user.id, user.email);
+  const profileCompleted = Boolean(user.profile_completed);
+  const tokens = signTokens(user.id, user.email, profileCompleted);
   await storeRefreshToken(user.id, tokens.refreshToken);
 
-  return { ...tokens, isFirstLogin: false };
+  return { ...tokens, isFirstLogin: false, profileCompleted };
 }
 
 export async function logout(userId: string): Promise<void> {

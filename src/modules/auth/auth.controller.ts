@@ -1,8 +1,9 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
 import * as authService from './auth.service';
 
-const COOKIE_NAME = 'obs_rt';
-const COOKIE_OPTS = {
+// obs_rt  — httpOnly, holds the actual refresh token (never readable from JS)
+const RT_NAME = 'obs_rt';
+const RT_OPTS = {
   httpOnly: true,
   secure:   process.env['NODE_ENV'] === 'production',
   sameSite: 'lax' as const,
@@ -10,15 +11,30 @@ const COOKIE_OPTS = {
   maxAge:   7 * 24 * 60 * 60,   // 7 days in seconds
 };
 
+// obs_sid — NOT httpOnly, just a presence flag ("1") so the frontend knows
+//           whether to attempt a silent refresh on page load.
+//           Contains no sensitive data — the actual auth is still in obs_rt.
+const SID_NAME = 'obs_sid';
+const SID_OPTS = {
+  httpOnly: false,
+  secure:   process.env['NODE_ENV'] === 'production',
+  sameSite: 'lax' as const,
+  path:     '/',              // must be accessible on all frontend routes
+  maxAge:   7 * 24 * 60 * 60,
+};
+
 type RegisterBody = { email: string; password: string; name: string };
 type LoginBody    = { email: string; password: string; rememberMe?: boolean };
 
-function setRefreshCookie(reply: FastifyReply, token: string): void {
-  reply.setCookie(COOKIE_NAME, token, COOKIE_OPTS);
+function setSessionCookies(reply: FastifyReply, refreshToken: string, persistent = true): void {
+  const maxAge = persistent ? RT_OPTS.maxAge : undefined;
+  reply.setCookie(RT_NAME,  refreshToken, { ...RT_OPTS,  maxAge });
+  reply.setCookie(SID_NAME, '1',          { ...SID_OPTS, maxAge });
 }
 
-function clearRefreshCookie(reply: FastifyReply): void {
-  reply.clearCookie(COOKIE_NAME, { path: '/auth' });
+function clearSessionCookies(reply: FastifyReply): void {
+  reply.clearCookie(RT_NAME,  { path: '/auth' });
+  reply.clearCookie(SID_NAME, { path: '/' });
 }
 
 export async function registerHandler(
@@ -30,10 +46,10 @@ export async function registerHandler(
     request.body.password,
     request.body.name,
   );
-  setRefreshCookie(reply, tokens.refreshToken);
+  setSessionCookies(reply, tokens.refreshToken);
   reply.code(201).send({
     success: true,
-    data: { accessToken: tokens.accessToken, isFirstLogin: tokens.isFirstLogin },
+    data: { accessToken: tokens.accessToken, isFirstLogin: tokens.isFirstLogin, profileCompleted: tokens.profileCompleted },
   });
 }
 
@@ -45,14 +61,11 @@ export async function loginHandler(
   const tokens = await authService.login(email, password);
 
   // rememberMe=true → persistent cookie (7 days); false → session cookie (closes with browser)
-  reply.setCookie(COOKIE_NAME, tokens.refreshToken, {
-    ...COOKIE_OPTS,
-    maxAge: rememberMe ? COOKIE_OPTS.maxAge : undefined,
-  });
+  setSessionCookies(reply, tokens.refreshToken, rememberMe);
 
   reply.send({
     success: true,
-    data: { accessToken: tokens.accessToken, isFirstLogin: tokens.isFirstLogin },
+    data: { accessToken: tokens.accessToken, isFirstLogin: tokens.isFirstLogin, profileCompleted: tokens.profileCompleted },
   });
 }
 
@@ -60,7 +73,7 @@ export async function refreshHandler(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
-  const rt = request.cookies[COOKIE_NAME];
+  const rt = request.cookies[RT_NAME];
   if (!rt) {
     return reply.code(401).send({
       success: false,
@@ -68,10 +81,10 @@ export async function refreshHandler(
     });
   }
   const tokens = await authService.refresh(rt);
-  setRefreshCookie(reply, tokens.refreshToken);
+  setSessionCookies(reply, tokens.refreshToken);
   reply.send({
     success: true,
-    data: { accessToken: tokens.accessToken, isFirstLogin: tokens.isFirstLogin },
+    data: { accessToken: tokens.accessToken, isFirstLogin: tokens.isFirstLogin, profileCompleted: tokens.profileCompleted },
   });
 }
 
@@ -80,6 +93,6 @@ export async function logoutHandler(
   reply: FastifyReply,
 ): Promise<void> {
   await authService.logout(request.user.id);
-  clearRefreshCookie(reply);
+  clearSessionCookies(reply);
   reply.send({ success: true, data: null });
 }
