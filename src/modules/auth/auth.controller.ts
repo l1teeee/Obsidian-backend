@@ -1,6 +1,9 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
 import * as authService from './auth.service';
 
+type VerifyEmailBody  = { email: string; code: string };
+type ResendVerifyBody = { email: string };
+
 // obs_rt  — httpOnly, holds the actual refresh token (never readable from JS)
 const RT_NAME = 'obs_rt';
 const RT_OPTS = {
@@ -23,7 +26,7 @@ const SID_OPTS = {
   maxAge:   7 * 24 * 60 * 60,
 };
 
-type RegisterBody = { email: string; password: string; name: string };
+type RegisterBody = { email: string; password: string };
 type LoginBody    = { email: string; password: string; rememberMe?: boolean };
 
 function setSessionCookies(reply: FastifyReply, refreshToken: string, persistent = true): void {
@@ -41,16 +44,32 @@ export async function registerHandler(
   request: FastifyRequest<{ Body: RegisterBody }>,
   reply: FastifyReply,
 ): Promise<void> {
-  const tokens = await authService.register(
+  const result = await authService.register(
     request.body.email,
     request.body.password,
-    request.body.name,
   );
+  // No cookies set — user must verify email before logging in
+  reply.code(201).send({ success: true, data: result });
+}
+
+export async function verifyEmailHandler(
+  request: FastifyRequest<{ Body: VerifyEmailBody }>,
+  reply: FastifyReply,
+): Promise<void> {
+  const tokens = await authService.verifyEmail(request.body.email, request.body.code);
   setSessionCookies(reply, tokens.refreshToken);
-  reply.code(201).send({
+  reply.send({
     success: true,
     data: { accessToken: tokens.accessToken, isFirstLogin: tokens.isFirstLogin, profileCompleted: tokens.profileCompleted },
   });
+}
+
+export async function resendVerificationHandler(
+  request: FastifyRequest<{ Body: ResendVerifyBody }>,
+  reply: FastifyReply,
+): Promise<void> {
+  const result = await authService.resendVerification(request.body.email);
+  reply.send({ success: true, data: result });
 }
 
 export async function loginHandler(

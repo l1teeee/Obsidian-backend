@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
@@ -6,12 +7,14 @@ import { env } from '../../config/env';
 import { uid } from '../../lib/uid';
 
 interface UserRow extends RowDataPacket {
-  id:                string;
-  email:             string;
-  password_hash:     string;
-  name:              string | null;
-  first_login:       number;
-  profile_completed: number;
+  id:                         string;
+  email:                      string;
+  password_hash:              string;
+  name:                       string | null;
+  first_login:                number;
+  profile_completed:          number;
+  email_verified:             number;
+  email_verification_token:   string | null;
 }
 
 interface RefreshTokenRow extends RowDataPacket {
@@ -25,6 +28,11 @@ export interface TokenPair {
   refreshToken:     string;
   isFirstLogin:     boolean;
   profileCompleted: boolean;
+}
+
+export interface RegisterResult {
+  email:           string;
+  devVerifyToken?: string;   // only included outside production
 }
 
 function appError(errorCode: string, message: string, statusCode: number): Error {
@@ -57,8 +65,7 @@ async function storeRefreshToken(userId: string, token: string): Promise<void> {
 export async function register(
   email: string,
   password: string,
-  name: string,
-): Promise<TokenPair> {
+): Promise<RegisterResult> {
   const [existing] = await pool.query<UserRow[]>(
     'SELECT id FROM users WHERE email = ? LIMIT 1',
     [email],
@@ -68,24 +75,73 @@ export async function register(
     throw appError('EMAIL_ALREADY_EXISTS', 'Email is already registered', 409);
   }
 
-  const id           = uid();
-  const passwordHash = await bcrypt.hash(password, env.BCRYPT_ROUNDS);
+  const id                = uid();
+  const passwordHash      = await bcrypt.hash(password, env.BCRYPT_ROUNDS);
+  const verificationCode = String(Math.floor(100000 + Math.random() * 900000)); // 6-digit code
 
   await pool.query<ResultSetHeader>(
-    'INSERT INTO users (id, email, password_hash, name) VALUES (?, ?, ?, ?)',
-    [id, email, passwordHash, name],
+    'INSERT INTO users (id, email, password_hash, email_verification_token) VALUES (?, ?, ?, ?)',
+    [id, email, passwordHash, verificationCode],
   );
 
-  // New users always start with profile_completed = 0
-  const tokens = signTokens(id, email, false);
-  await storeRefreshToken(id, tokens.refreshToken);
+  // Mock email — in production this would call an email service
+  console.log(`[EMAIL MOCK] Verification code for <${email}>: ${verificationCode}`);
 
-  return { ...tokens, isFirstLogin: true, profileCompleted: false };
+  return {
+    email,
+    ...(process.env['NODE_ENV'] !== 'production' && { devVerifyToken: verificationCode }),
+  };
+}
+
+export async function verifyEmail(email: string, code: string): Promise<TokenPair> {
+  const [rows] = await pool.query<UserRow[]>(
+    'SELECT id, email, profile_completed, email_verification_token FROM users WHERE email = ? AND email_verified = 0 LIMIT 1',
+    [email],
+  );
+
+  if (rows.length === 0) {
+    throw appError('INVALID_TOKEN', 'Email already verified or account does not exist', 400);
+  }
+
+  const user = rows[0];
+
+  await pool.query(
+    'UPDATE users SET email_verified = 1, email_verification_token = NULL WHERE id = ?',
+    [user.id],
+  );
+
+  const profileCompleted = Boolean(user.profile_completed);
+  const tokens           = signTokens(user.id, user.email, profileCompleted);
+  await storeRefreshToken(user.id, tokens.refreshToken);
+
+  return { ...tokens, isFirstLogin: true, profileCompleted };
+}
+
+export async function resendVerification(email: string): Promise<{ devVerifyToken?: string }> {
+  const [rows] = await pool.query<UserRow[]>(
+    'SELECT id FROM users WHERE email = ? AND email_verified = 0 LIMIT 1',
+    [email],
+  );
+
+  // Always return success to avoid email enumeration
+  if (rows.length === 0) return {};
+
+  const user              = rows[0];
+  const verificationCode = String(Math.floor(100000 + Math.random() * 900000));
+
+  await pool.query(
+    'UPDATE users SET email_verification_token = ? WHERE id = ?',
+    [verificationCode, user.id],
+  );
+
+  console.log(`[EMAIL MOCK] New verification code for <${email}>: ${verificationCode}`);
+
+  return process.env['NODE_ENV'] !== 'production' ? { devVerifyToken: verificationCode } : {};
 }
 
 export async function login(email: string, password: string): Promise<TokenPair> {
   const [rows] = await pool.query<UserRow[]>(
-    'SELECT id, email, password_hash, first_login, profile_completed FROM users WHERE email = ? LIMIT 1',
+    'SELECT id, email, password_hash, first_login, profile_completed, email_verified FROM users WHERE email = ? LIMIT 1',
     [email],
   );
 
@@ -99,6 +155,10 @@ export async function login(email: string, password: string): Promise<TokenPair>
 
   if (!passwordMatch) {
     throw appError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
+  }
+
+  if (!user.email_verified) {
+    throw appError('EMAIL_NOT_VERIFIED', 'Please verify your email address before signing in', 403);
   }
 
   const profileCompleted = Boolean(user.profile_completed);
