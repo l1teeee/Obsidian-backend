@@ -40,15 +40,17 @@ export async function inspireHandler(
 }
 
 interface SuggestTimeBody {
-  caption?:  string;
-  platforms: string[];
+  caption?:     string;
+  platforms:    string[];
+  currentHour?: number;
+  weekday?:     string;
 }
 
 export async function suggestTimeHandler(
   request: FastifyRequest<{ Body: SuggestTimeBody }>,
   reply:   FastifyReply,
 ): Promise<void> {
-  const { caption = '', platforms } = request.body;
-  const result = await suggestScheduleTime({ caption, platforms });
+  const { caption = '', platforms, currentHour, weekday } = request.body;
+  const result = await suggestScheduleTime({ caption, platforms, currentHour, weekday });
   reply.code(200).send({ success: true, data: result });
 }

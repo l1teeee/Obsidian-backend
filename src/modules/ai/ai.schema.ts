@@ -41,12 +41,14 @@ export const suggestTimeSchema = {
     type: 'object',
     required: ['platforms'],
     properties: {
-      caption:   { type: 'string', maxLength: 2200 },
+      caption:     { type: 'string', maxLength: 2200 },
       platforms: {
         type:     'array',
         items:    { type: 'string', enum: ['meta', 'linkedin', 'youtube'] },
         minItems: 1,
       },
+      currentHour: { type: 'integer', minimum: 0, maximum: 23 },
+      weekday:     { type: 'string', maxLength: 20 },
     },
     additionalProperties: false,
   },

@@ -117,8 +117,10 @@ function buildContextBlock(s: AiSettings): string {
 }
 
 export interface SuggestTimeOptions {
-  caption:   string;
-  platforms: string[];
+  caption:      string;
+  platforms:    string[];
+  currentHour?: number;   // client's local hour (0-23) — use instead of server time
+  weekday?:     string;   // client's local weekday name
 }
 
 export interface SuggestTimeResult {
@@ -137,25 +139,30 @@ export async function suggestScheduleTime(options: SuggestTimeOptions): Promise<
     );
   }
 
-  const { caption, platforms } = options;
+  const { caption, platforms, currentHour, weekday: clientWeekday } = options;
   const platformNames = platforms.map(p => {
     const map: Record<string, string> = { meta: 'Instagram/Facebook', linkedin: 'LinkedIn', youtube: 'YouTube' };
     return map[p] ?? p;
   }).join(', ');
 
-  const now     = new Date();
-  const weekday = now.toLocaleDateString('en-US', { weekday: 'long' });
+  // Use client-provided time if available; fall back to server time
+  const now            = new Date();
+  const weekday        = clientWeekday ?? now.toLocaleDateString('en-US', { weekday: 'long' });
+  const hourNow        = currentHour   ?? now.getHours();
+  const hourNowFmt     = `${String(hourNow).padStart(2, '0')}:00`;
 
   const userPrompt = `Analyze this social media caption and suggest the single best time to post it.
 
 Caption: "${caption || '(no caption yet — analyze based on platforms only)'}"
 Target platforms: ${platformNames}
 Current day: ${weekday}
+Current local time of the user: ${hourNowFmt} (use this to decide if today still makes sense or if tomorrow is better)
 
 Consider:
 - Content category (educational, promotional, entertainment, inspirational, etc.)
 - Platform-specific peak engagement windows
 - Weekday vs weekend patterns
+- If the suggested hour has already passed today, use dayOffset >= 1
 - Whether same-day posting makes sense or a future day is better
 
 Return ONLY a JSON object (no markdown, no explanation):
