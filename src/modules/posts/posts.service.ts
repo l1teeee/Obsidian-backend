@@ -2,6 +2,43 @@ import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
 import { uid } from '../../lib/uid';
 
+// ─── Facebook publishing ──────────────────────────────────────────────────────
+
+interface FbConnection extends RowDataPacket {
+  access_token: string;
+  page_id:      string;
+  page_name:    string | null;
+}
+
+async function getFbConnection(userId: string): Promise<FbConnection> {
+  const [rows] = await pool.query<FbConnection[]>(
+    `SELECT access_token, page_id, page_name
+     FROM social_connections
+     WHERE user_id = ? AND platform = 'facebook' AND page_id IS NOT NULL AND is_active = 1
+     LIMIT 1`,
+    [userId],
+  );
+  if (!rows[0]) throw appError('NO_FB_CONNECTION', 'No Facebook page connected. Connect a Facebook account first.', 422);
+  return rows[0];
+}
+
+async function publishTextToFacebook(userId: string, caption: string): Promise<string> {
+  const conn = await getFbConnection(userId);
+  const res  = await fetch(`https://graph.facebook.com/v21.0/${conn.page_id}/feed`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ message: caption, access_token: conn.access_token }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: { message: string } };
+    throw appError('FB_PUBLISH_FAILED', body.error?.message ?? `Facebook API error ${res.status}`, 502);
+  }
+  const data = await res.json() as { id: string };
+  // FB returns "pageId_postId" — build the standard permalink
+  const [pageId, postId] = data.id.split('_');
+  return postId ? `https://www.facebook.com/${pageId}/posts/${postId}` : `https://www.facebook.com/${data.id}`;
+}
+
 interface PostRow extends RowDataPacket {
   id:           string;
   user_id:      string;
@@ -126,8 +163,9 @@ export async function getPostById(id: string, userId: string): Promise<Post> {
 }
 
 export async function createPost(userId: string, data: CreatePostData): Promise<Post> {
-  const id           = uid();
+  const id            = uid();
   const mediaUrlsJson = data.media_urls ? JSON.stringify(data.media_urls) : null;
+  const status        = data.status ?? 'draft';
 
   await pool.query<ResultSetHeader>(
     `INSERT INTO posts (id, user_id, platform, post_type, caption, media_urls, scheduled_at, status)
@@ -140,9 +178,18 @@ export async function createPost(userId: string, data: CreatePostData): Promise<
       data.caption     ?? null,
       mediaUrlsJson,
       data.scheduled_at ? toMysqlDatetime(data.scheduled_at) : null,
-      data.status      ?? 'draft',
+      status,
     ]
   );
+
+  // Publish immediately to Facebook if requested
+  if (status === 'published' && data.platform === 'meta') {
+    const permalink = await publishTextToFacebook(userId, data.caption ?? '');
+    await pool.query(
+      `UPDATE posts SET permalink = ?, published_at = NOW() WHERE id = ?`,
+      [permalink, id],
+    );
+  }
 
   return getById(id, userId);
 }
@@ -173,6 +220,18 @@ export async function updatePost(id: string, userId: string, data: UpdatePostDat
     `UPDATE posts SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`,
     values
   );
+
+  // Publish to Facebook if the status is being set to published
+  if (data.status === 'published' && data.platform === 'meta') {
+    const post = await getById(id, userId);
+    if (!post.permalink) {
+      const permalink = await publishTextToFacebook(userId, post.caption ?? '');
+      await pool.query(
+        `UPDATE posts SET permalink = ?, published_at = NOW() WHERE id = ?`,
+        [permalink, id],
+      );
+    }
+  }
 
   return getById(id, userId);
 }

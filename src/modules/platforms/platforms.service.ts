@@ -17,6 +17,7 @@ export interface SocialConnection {
   page_id:            string | null;
   page_name:          string | null;
   ig_business_id:     string | null;
+  account_type:       string | null;
   scopes:             string;
   created_at:         Date;
   updated_at:         Date;
@@ -105,12 +106,60 @@ export async function extendToken(shortToken: string): Promise<FbTokenResponse> 
  * Use existing Facebook Page tokens to detect and save linked Instagram accounts.
  * Returns the number of IG accounts upserted.
  */
+/**
+ * Tries to resolve the Instagram account ID linked to a Facebook page.
+ * Handles both classic pages (ig_business_id already in DB) and New Pages Experience (NPE)
+ * pages that don't return IG info via /me/accounts.
+ *
+ * Resolution order:
+ *  1. ig_business_id already stored in the FB row
+ *  2. GET /{page_id}?fields=instagram_business_account  (NPE business)
+ *  3. GET /{page_id}?fields=connected_instagram_account (NPE creator)
+ *  4. GET /me/instagram_accounts                        (personal IG linked to page token)
+ */
+async function resolveIgAccountId(
+  pageId:     string | null,
+  pageToken:  string,
+  storedIgId: string | null,
+): Promise<string | null> {
+  // 1. Already stored
+  if (storedIgId) return storedIgId;
+  if (!pageId) return null;
+
+  // 2. instagram_business_account (NPE business pages)
+  try {
+    const res = await fbGet<{ instagram_business_account?: { id: string } }>(
+      `/${pageId}`, pageToken, { fields: 'instagram_business_account' },
+    );
+    if (res.instagram_business_account?.id) return res.instagram_business_account.id;
+  } catch { /* try next */ }
+
+  // 3. connected_instagram_account (NPE creator pages)
+  try {
+    const res = await fbGet<{ connected_instagram_account?: { id: string } }>(
+      `/${pageId}`, pageToken, { fields: 'connected_instagram_account' },
+    );
+    if (res.connected_instagram_account?.id) return res.connected_instagram_account.id;
+  } catch { /* try next */ }
+
+  // 4. /me/instagram_accounts with the page token
+  try {
+    const res = await fbGet<{ data?: { id: string }[] }>(
+      '/me/instagram_accounts', pageToken,
+    );
+    if (res.data && res.data.length > 0) return res.data[0].id;
+  } catch { /* no IG found */ }
+
+  return null;
+}
+
 export async function linkInstagramFromExistingPages(userId: string): Promise<number> {
+  // Fetch ALL active FB rows — including those without ig_business_id (NPE pages)
   const [rows] = await pool.query<SocialConnectionRow[]>(
     `SELECT id, user_id, platform, platform_account_id, account_name, account_picture,
             access_token, token_expires_at, page_id, page_name, ig_business_id, scopes
      FROM social_connections
-     WHERE user_id = ? AND platform = 'facebook' AND ig_business_id IS NOT NULL`,
+     WHERE user_id = ? AND platform = 'facebook' AND is_active = 1`,
     [userId],
   );
 
@@ -122,26 +171,43 @@ export async function linkInstagramFromExistingPages(userId: string): Promise<nu
     await dbConn.beginTransaction();
 
     for (const fbConn of rows) {
-      const igAccountId = fbConn.ig_business_id!;
-      const pageToken   = fbConn.access_token;
+      const pageToken = fbConn.access_token;
 
-      let igName    = fbConn.page_name ?? 'Instagram';
-      let igPicture: string | null = null;
+      // Resolve IG account ID using all available strategies
+      const igAccountId = await resolveIgAccountId(
+        fbConn.page_id,
+        pageToken,
+        fbConn.ig_business_id,
+      );
+
+      if (!igAccountId) continue; // this FB row has no linked IG — skip
+
+      // Fetch IG profile details
+      let igName      = fbConn.page_name ?? 'Instagram';
+      let igPicture:  string | null = null;
+      let accountType: string | null = null;
 
       try {
-        const igInfo = await fbGet<{ username?: string; name?: string; profile_picture_url?: string }>(
-          `/${igAccountId}`, pageToken, { fields: 'username,name,profile_picture_url' },
+        const igInfo = await fbGet<{
+          username?:            string;
+          name?:                string;
+          profile_picture_url?: string;
+          account_type?:        string;
+        }>(
+          `/${igAccountId}`, pageToken,
+          { fields: 'id,name,username,profile_picture_url,account_type' },
         );
-        igName    = igInfo.username ?? igInfo.name ?? igName;
-        igPicture = igInfo.profile_picture_url ?? null;
+        igName      = igInfo.username ?? igInfo.name ?? igName;
+        igPicture   = igInfo.profile_picture_url ?? null;
+        accountType = igInfo.account_type ?? null;
       } catch { /* use fallbacks */ }
 
       const igId = uid();
       await dbConn.query(
         `INSERT INTO social_connections
            (id, user_id, platform, platform_account_id, account_name, account_picture,
-            access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
-         VALUES (?, ?, 'instagram', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            access_token, token_expires_at, page_id, page_name, ig_business_id, account_type, scopes)
+         VALUES (?, ?, 'instagram', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            account_name     = VALUES(account_name),
            account_picture  = VALUES(account_picture),
@@ -149,12 +215,15 @@ export async function linkInstagramFromExistingPages(userId: string): Promise<nu
            token_expires_at = VALUES(token_expires_at),
            page_id          = VALUES(page_id),
            page_name        = VALUES(page_name),
+           ig_business_id   = VALUES(ig_business_id),
+           account_type     = VALUES(account_type),
+           is_active        = 1,
            scopes           = VALUES(scopes),
            updated_at       = CURRENT_TIMESTAMP`,
         [
           igId, userId, igAccountId, igName, igPicture,
           pageToken, null,
-          fbConn.page_id, fbConn.page_name, igAccountId,
+          fbConn.page_id, fbConn.page_name, igAccountId, accountType,
           'instagram_basic,instagram_content_publish',
         ],
       );
@@ -175,7 +244,7 @@ export async function linkInstagramFromExistingPages(userId: string): Promise<nu
 export async function listConnections(userId: string): Promise<SocialConnection[]> {
   const [rows] = await pool.query<SocialConnectionRow[]>(
     `SELECT id, user_id, platform, platform_account_id, account_name, account_picture,
-            token_expires_at, page_id, page_name, ig_business_id, scopes, created_at, updated_at
+            token_expires_at, page_id, page_name, ig_business_id, account_type, scopes, created_at, updated_at
      FROM social_connections WHERE user_id = ? AND is_active = 1 ORDER BY created_at ASC`,
     [userId],
   );
@@ -233,13 +302,13 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
       const [existing] = await dbConn.query<SocialConnectionRow[]>(
         `SELECT id FROM social_connections
          WHERE user_id = ? AND platform = 'facebook' AND platform_account_id = ?
-           AND page_id IS NOT NULL AND is_active = 0
+           AND page_id IS NOT NULL
          ORDER BY updated_at DESC LIMIT 1`,
         [userId, me.id],
       );
 
       if (existing.length > 0) {
-        // Reactivate the previous row, preserving page_id / page_name / ig_business_id
+        // Restore the row with the new token, preserving page_id / page_name / ig_business_id
         await dbConn.query(
           `UPDATE social_connections
            SET is_active = 1, access_token = ?, account_name = ?, account_picture = ?,
@@ -303,21 +372,29 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
       if (igAccountId) {
         const igId = uid();
 
-        let igName    = page.name;
-        let igPicture = me.picture?.data?.url ?? null;
+        let igName       = page.name;
+        let igPicture    = me.picture?.data?.url ?? null;
+        let igAccType:   string | null = null;
         try {
-          const igInfo = await fbGet<{ username?: string; name?: string; profile_picture_url?: string }>(
-            `/${igAccountId}`, page.access_token, { fields: 'username,name,profile_picture_url' },
+          const igInfo = await fbGet<{
+            username?:            string;
+            name?:                string;
+            profile_picture_url?: string;
+            account_type?:        string;
+          }>(
+            `/${igAccountId}`, page.access_token,
+            { fields: 'username,name,profile_picture_url,account_type' },
           );
           igName    = igInfo.username ?? igInfo.name ?? page.name;
           igPicture = igInfo.profile_picture_url ?? igPicture;
+          igAccType = igInfo.account_type ?? null;
         } catch { /* use fallbacks */ }
 
         await dbConn.query(
           `INSERT INTO social_connections
              (id, user_id, platform, platform_account_id, account_name, account_picture,
-              access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
-           VALUES (?, ?, 'instagram', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              access_token, token_expires_at, page_id, page_name, ig_business_id, account_type, scopes)
+           VALUES (?, ?, 'instagram', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              account_name     = VALUES(account_name),
              account_picture  = VALUES(account_picture),
@@ -325,13 +402,14 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
              token_expires_at = VALUES(token_expires_at),
              page_id          = VALUES(page_id),
              page_name        = VALUES(page_name),
+             account_type     = VALUES(account_type),
              is_active        = 1,
              scopes           = VALUES(scopes),
              updated_at       = CURRENT_TIMESTAMP`,
           [
             igId, userId, igAccountId, igName, igPicture,
             page.access_token, null,
-            page.id, page.name, igAccountId,
+            page.id, page.name, igAccountId, igAccType,
             'instagram_basic,instagram_content_publish',
           ],
         );

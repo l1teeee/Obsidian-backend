@@ -52,6 +52,7 @@ export async function initFacebookOAuth(req: FastifyRequest, reply: FastifyReply
     'pages_show_list',
     'pages_manage_posts',
     'pages_read_engagement',
+    'instagram_basic',
   ].join(',');
 
   const authUrl = new URL('https://www.facebook.com/v21.0/dialog/oauth');
