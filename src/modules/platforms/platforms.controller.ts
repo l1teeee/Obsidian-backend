@@ -60,6 +60,9 @@ export async function initFacebookOAuth(req: FastifyRequest, reply: FastifyReply
   authUrl.searchParams.set('scope',         scopes);
   authUrl.searchParams.set('state',         state);
   authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('auth_type',     'reauthorize');
+  authUrl.searchParams.set('return_scopes', 'true');
+  authUrl.searchParams.set('auth_nonce',    String(Date.now()));
 
   reply.send({ success: true, data: { url: authUrl.toString() } });
 }

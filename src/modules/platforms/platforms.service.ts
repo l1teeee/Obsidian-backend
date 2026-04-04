@@ -176,7 +176,7 @@ export async function listConnections(userId: string): Promise<SocialConnection[
   const [rows] = await pool.query<SocialConnectionRow[]>(
     `SELECT id, user_id, platform, platform_account_id, account_name, account_picture,
             token_expires_at, page_id, page_name, ig_business_id, scopes, created_at, updated_at
-     FROM social_connections WHERE user_id = ? ORDER BY created_at ASC`,
+     FROM social_connections WHERE user_id = ? AND is_active = 1 ORDER BY created_at ASC`,
     [userId],
   );
   // Don't expose access_token in list
@@ -185,7 +185,7 @@ export async function listConnections(userId: string): Promise<SocialConnection[
 
 export async function deleteConnection(id: string, userId: string): Promise<void> {
   const [result] = await pool.query<ResultSetHeader>(
-    'DELETE FROM social_connections WHERE id = ? AND user_id = ?',
+    'UPDATE social_connections SET is_active = 0, updated_at = NOW() WHERE id = ? AND user_id = ? AND is_active = 1',
     [id, userId],
   );
   if (result.affectedRows === 0) {
@@ -228,23 +228,45 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
     await dbConn.beginTransaction();
 
     if (pagesResp.data.length === 0) {
-      // No Facebook Pages found — save the personal FB profile with the user token
-      const fbId = uid();
-
-      await dbConn.query(
-        `INSERT INTO social_connections
-           (id, user_id, platform, platform_account_id, account_name, account_picture,
-            access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
-         VALUES (?, ?, 'facebook', ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
-         ON DUPLICATE KEY UPDATE
-           account_name     = VALUES(account_name),
-           account_picture  = VALUES(account_picture),
-           access_token     = VALUES(access_token),
-           token_expires_at = VALUES(token_expires_at),
-           scopes           = VALUES(scopes),
-           updated_at       = CURRENT_TIMESTAMP`,
-        [fbId, userId, me.id, me.name, me.picture?.data?.url ?? null, userToken, expiresAt, 'public_profile,email'],
+      // No Facebook Pages returned — check if user had a previously disconnected row
+      // with page_id set (e.g. Facebook API glitch on reconnect) and reactivate it.
+      const [existing] = await dbConn.query<SocialConnectionRow[]>(
+        `SELECT id FROM social_connections
+         WHERE user_id = ? AND platform = 'facebook' AND platform_account_id = ?
+           AND page_id IS NOT NULL AND is_active = 0
+         ORDER BY updated_at DESC LIMIT 1`,
+        [userId, me.id],
       );
+
+      if (existing.length > 0) {
+        // Reactivate the previous row, preserving page_id / page_name / ig_business_id
+        await dbConn.query(
+          `UPDATE social_connections
+           SET is_active = 1, access_token = ?, account_name = ?, account_picture = ?,
+               token_expires_at = ?, scopes = ?, updated_at = NOW()
+           WHERE id = ?`,
+          [userToken, me.name, me.picture?.data?.url ?? null, expiresAt,
+           'pages_show_list,pages_read_engagement,pages_manage_posts', existing[0].id],
+        );
+      } else {
+        // Truly no pages — save personal FB profile as fallback
+        const fbId = uid();
+        await dbConn.query(
+          `INSERT INTO social_connections
+             (id, user_id, platform, platform_account_id, account_name, account_picture,
+              access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
+           VALUES (?, ?, 'facebook', ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
+           ON DUPLICATE KEY UPDATE
+             account_name     = VALUES(account_name),
+             account_picture  = VALUES(account_picture),
+             access_token     = VALUES(access_token),
+             token_expires_at = VALUES(token_expires_at),
+             is_active        = 1,
+             scopes           = VALUES(scopes),
+             updated_at       = CURRENT_TIMESTAMP`,
+          [fbId, userId, me.id, me.name, me.picture?.data?.url ?? null, userToken, expiresAt, 'public_profile,email'],
+        );
+      }
     }
 
     for (const page of pagesResp.data) {
@@ -267,6 +289,7 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
            page_id          = VALUES(page_id),
            page_name        = VALUES(page_name),
            ig_business_id   = VALUES(ig_business_id),
+           is_active        = 1,
            scopes           = VALUES(scopes),
            updated_at       = CURRENT_TIMESTAMP`,
         [
@@ -302,6 +325,7 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
              token_expires_at = VALUES(token_expires_at),
              page_id          = VALUES(page_id),
              page_name        = VALUES(page_name),
+             is_active        = 1,
              scopes           = VALUES(scopes),
              updated_at       = CURRENT_TIMESTAMP`,
           [
@@ -341,6 +365,7 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
              account_picture  = VALUES(account_picture),
              access_token     = VALUES(access_token),
              token_expires_at = VALUES(token_expires_at),
+             is_active        = 1,
              scopes           = VALUES(scopes),
              updated_at       = CURRENT_TIMESTAMP`,
           [
