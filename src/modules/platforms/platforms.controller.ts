@@ -21,6 +21,20 @@ export async function disconnect(
   reply.send({ success: true });
 }
 
+// ─── Connect Instagram from existing FB pages ─────────────────────────────────
+
+export async function connectInstagramFromPages(req: FastifyRequest, reply: FastifyReply) {
+  const userId = (req.user as { id: string }).id;
+  const count  = await platformsService.linkInstagramFromExistingPages(userId);
+  if (count === 0) {
+    return reply.code(404).send({
+      success: false,
+      error: { code: 'NO_IG_FOUND', message: 'No Instagram accounts found linked to your Facebook pages.' },
+    });
+  }
+  reply.send({ success: true, data: { linked: count } });
+}
+
 // ─── Initiate Facebook OAuth ──────────────────────────────────────────────────
 
 export async function initFacebookOAuth(req: FastifyRequest, reply: FastifyReply) {
@@ -32,7 +46,13 @@ export async function initFacebookOAuth(req: FastifyRequest, reply: FastifyReply
   const userId = (req.user as { id: string }).id;
   const state  = req.server.jwt.sign({ userId, ts: Date.now() }, { expiresIn: '10m' });
 
-  const scopes = ['email', 'public_profile'].join(',');
+  const scopes = [
+    'email',
+    'public_profile',
+    'pages_show_list',
+    'pages_manage_posts',
+    'pages_read_engagement',
+  ].join(',');
 
   const authUrl = new URL('https://www.facebook.com/v21.0/dialog/oauth');
   authUrl.searchParams.set('client_id',     env.FACEBOOK_CLIENT_ID);

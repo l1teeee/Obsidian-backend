@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import {
   getConnections,
   disconnect,
+  connectInstagramFromPages,
   initFacebookOAuth,
   facebookOAuthCallback,
 } from './platforms.controller';
@@ -18,6 +19,13 @@ export default async function platformsRoutes(fastify: FastifyInstance) {
     '/:id',
     { onRequest: [fastify.authenticate] },
     disconnect,
+  );
+
+  // Connect Instagram from existing FB page tokens (no new OAuth required)
+  fastify.get(
+    '/connect/instagram',
+    { onRequest: [fastify.authenticate] },
+    connectInstagramFromPages,
   );
 
   // Initiates Facebook OAuth → redirects user to Facebook

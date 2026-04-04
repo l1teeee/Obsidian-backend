@@ -42,7 +42,8 @@ interface FbPage {
   id:           string;
   name:         string;
   access_token: string;
-  instagram_business_account?: { id: string };
+  instagram_business_account?:  { id: string };
+  connected_instagram_account?: { id: string };
 }
 
 interface FbPagesResponse {
@@ -100,6 +101,77 @@ export async function extendToken(shortToken: string): Promise<FbTokenResponse> 
 
 // ─── Service functions ────────────────────────────────────────────────────────
 
+/**
+ * Use existing Facebook Page tokens to detect and save linked Instagram accounts.
+ * Returns the number of IG accounts upserted.
+ */
+export async function linkInstagramFromExistingPages(userId: string): Promise<number> {
+  const [rows] = await pool.query<SocialConnectionRow[]>(
+    `SELECT id, user_id, platform, platform_account_id, account_name, account_picture,
+            access_token, token_expires_at, page_id, page_name, ig_business_id, scopes
+     FROM social_connections
+     WHERE user_id = ? AND platform = 'facebook' AND ig_business_id IS NOT NULL`,
+    [userId],
+  );
+
+  if (rows.length === 0) return 0;
+
+  let count = 0;
+  const dbConn = await pool.getConnection();
+  try {
+    await dbConn.beginTransaction();
+
+    for (const fbConn of rows) {
+      const igAccountId = fbConn.ig_business_id!;
+      const pageToken   = fbConn.access_token;
+
+      let igName    = fbConn.page_name ?? 'Instagram';
+      let igPicture: string | null = null;
+
+      try {
+        const igInfo = await fbGet<{ username?: string; name?: string; profile_picture_url?: string }>(
+          `/${igAccountId}`, pageToken, { fields: 'username,name,profile_picture_url' },
+        );
+        igName    = igInfo.username ?? igInfo.name ?? igName;
+        igPicture = igInfo.profile_picture_url ?? null;
+      } catch { /* use fallbacks */ }
+
+      const igId = uid();
+      await dbConn.query(
+        `INSERT INTO social_connections
+           (id, user_id, platform, platform_account_id, account_name, account_picture,
+            access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
+         VALUES (?, ?, 'instagram', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           account_name     = VALUES(account_name),
+           account_picture  = VALUES(account_picture),
+           access_token     = VALUES(access_token),
+           token_expires_at = VALUES(token_expires_at),
+           page_id          = VALUES(page_id),
+           page_name        = VALUES(page_name),
+           scopes           = VALUES(scopes),
+           updated_at       = CURRENT_TIMESTAMP`,
+        [
+          igId, userId, igAccountId, igName, igPicture,
+          pageToken, null,
+          fbConn.page_id, fbConn.page_name, igAccountId,
+          'instagram_basic,instagram_content_publish',
+        ],
+      );
+      count++;
+    }
+
+    await dbConn.commit();
+  } catch (err) {
+    await dbConn.rollback();
+    throw err;
+  } finally {
+    dbConn.release();
+  }
+
+  return count;
+}
+
 export async function listConnections(userId: string): Promise<SocialConnection[]> {
   const [rows] = await pool.query<SocialConnectionRow[]>(
     `SELECT id, user_id, platform, platform_account_id, account_name, account_picture,
@@ -146,20 +218,43 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
     fields: 'id,name,picture.type(large)',
   });
 
-  // 4. Pages (+ instagram_business_account)
+  // 4. Pages (+ instagram_business_account + connected_instagram_account for Creator/personal profiles)
   const pagesResp = await fbGet<FbPagesResponse>('/me/accounts', userToken, {
-    fields: 'id,name,access_token,instagram_business_account',
+    fields: 'id,name,access_token,instagram_business_account,connected_instagram_account',
   });
 
-  // 5. IG account name for each page's IG account
-  const conn = await pool.getConnection();
+  const dbConn = await pool.getConnection();
   try {
-    await conn.beginTransaction();
+    await dbConn.beginTransaction();
+
+    if (pagesResp.data.length === 0) {
+      // No Facebook Pages found — save the personal FB profile with the user token
+      const fbId = uid();
+
+      await dbConn.query(
+        `INSERT INTO social_connections
+           (id, user_id, platform, platform_account_id, account_name, account_picture,
+            access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
+         VALUES (?, ?, 'facebook', ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
+         ON DUPLICATE KEY UPDATE
+           account_name     = VALUES(account_name),
+           account_picture  = VALUES(account_picture),
+           access_token     = VALUES(access_token),
+           token_expires_at = VALUES(token_expires_at),
+           scopes           = VALUES(scopes),
+           updated_at       = CURRENT_TIMESTAMP`,
+        [fbId, userId, me.id, me.name, me.picture?.data?.url ?? null, userToken, expiresAt, 'public_profile,email'],
+      );
+    }
 
     for (const page of pagesResp.data) {
-      // Upsert Facebook page connection
+      // instagram_business_account → Business account (full API)
+      // connected_instagram_account → Creator / personal account linked to this Page
+      const igAccountId = page.instagram_business_account?.id ?? page.connected_instagram_account?.id ?? null;
+
       const fbId = uid();
-      await conn.query(
+
+      await dbConn.query(
         `INSERT INTO social_connections
            (id, user_id, platform, platform_account_id, account_name, account_picture,
             access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
@@ -175,35 +270,27 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
            scopes           = VALUES(scopes),
            updated_at       = CURRENT_TIMESTAMP`,
         [
-          fbId,
-          userId,
-          me.id,                           // FB user id as account id
-          me.name,
-          me.picture?.data?.url ?? null,
-          page.access_token,               // Page Access Token (never expires)
-          null,                            // Page tokens don't expire
-          page.id,
-          page.name,
-          page.instagram_business_account?.id ?? null,
-          'pages_show_list,pages_read_engagement,instagram_basic,instagram_content_publish',
+          fbId, userId, me.id, me.name, me.picture?.data?.url ?? null,
+          page.access_token, null,
+          page.id, page.name, igAccountId,
+          'pages_show_list,pages_read_engagement,pages_manage_posts',
         ],
       );
 
-      // Upsert Instagram connection if this page has a linked IG business account
-      if (page.instagram_business_account?.id) {
-        const igId   = uid();
-        const igAcct = page.instagram_business_account.id;
+      if (igAccountId) {
+        const igId = uid();
 
-        // Fetch IG username
-        let igName = page.name;
+        let igName    = page.name;
+        let igPicture = me.picture?.data?.url ?? null;
         try {
-          const igInfo = await fbGet<{ username?: string; name?: string }>(
-            `/${igAcct}`, page.access_token, { fields: 'username,name' },
+          const igInfo = await fbGet<{ username?: string; name?: string; profile_picture_url?: string }>(
+            `/${igAccountId}`, page.access_token, { fields: 'username,name,profile_picture_url' },
           );
-          igName = igInfo.username ?? igInfo.name ?? page.name;
-        } catch { /* ignore, use page name as fallback */ }
+          igName    = igInfo.username ?? igInfo.name ?? page.name;
+          igPicture = igInfo.profile_picture_url ?? igPicture;
+        } catch { /* use fallbacks */ }
 
-        await conn.query(
+        await dbConn.query(
           `INSERT INTO social_connections
              (id, user_id, platform, platform_account_id, account_name, account_picture,
               access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
@@ -218,27 +305,63 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
              scopes           = VALUES(scopes),
              updated_at       = CURRENT_TIMESTAMP`,
           [
-            igId,
-            userId,
-            igAcct,
-            igName,
-            me.picture?.data?.url ?? null,
-            page.access_token,
-            null,
-            page.id,
-            page.name,
-            igAcct,
+            igId, userId, igAccountId, igName, igPicture,
+            page.access_token, null,
+            page.id, page.name, igAccountId,
             'instagram_basic,instagram_content_publish',
           ],
         );
       }
     }
 
-    await conn.commit();
+    // Also check Instagram accounts linked directly to the Facebook profile
+    // (personal / creator accounts not tied to any Page)
+    interface PersonalIgAccount {
+      id:                   string;
+      name?:                string;
+      username?:            string;
+      profile_picture_url?: string;
+    }
+    interface UserIgResponse {
+      instagram_accounts?: { data: PersonalIgAccount[] };
+    }
+    try {
+      const userIgResp = await fbGet<UserIgResponse>('/me', userToken, {
+        fields: 'instagram_accounts{id,name,username,profile_picture_url}',
+      });
+      for (const igAcct of userIgResp.instagram_accounts?.data ?? []) {
+        const igId = uid();
+        await dbConn.query(
+          `INSERT INTO social_connections
+             (id, user_id, platform, platform_account_id, account_name, account_picture,
+              access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
+           VALUES (?, ?, 'instagram', ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             account_name     = VALUES(account_name),
+             account_picture  = VALUES(account_picture),
+             access_token     = VALUES(access_token),
+             token_expires_at = VALUES(token_expires_at),
+             scopes           = VALUES(scopes),
+             updated_at       = CURRENT_TIMESTAMP`,
+          [
+            igId, userId,
+            igAcct.id,
+            igAcct.username ?? igAcct.name ?? 'Instagram',
+            igAcct.profile_picture_url ?? null,
+            userToken,
+            expiresAt,
+            igAcct.id,
+            'instagram_basic,instagram_content_publish',
+          ],
+        );
+      }
+    } catch { /* scope not granted or no accounts — skip silently */ }
+
+    await dbConn.commit();
   } catch (err) {
-    await conn.rollback();
+    await dbConn.rollback();
     throw err;
   } finally {
-    conn.release();
+    dbConn.release();
   }
 }
