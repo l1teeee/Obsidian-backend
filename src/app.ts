@@ -14,6 +14,7 @@ import aiSettingsRoutes   from './modules/ai-settings/ai-settings.routes';
 import mediaRoutes        from './modules/media/media.routes';
 import usersRoutes        from './modules/users/users.routes';
 import platformsRoutes    from './modules/platforms/platforms.routes';
+import metricsRoutes      from './modules/metrics/metrics.routes';
 
 interface AppError extends FastifyError {
   errorCode?: string;
@@ -77,6 +78,7 @@ export function buildApp() {
   fastify.register(mediaRoutes,      { prefix: '/media' });
   fastify.register(usersRoutes,      { prefix: '/users' });
   fastify.register(platformsRoutes,  { prefix: '/platforms' });
+  fastify.register(metricsRoutes,    { prefix: '/metrics' });
 
   return fastify;
 }

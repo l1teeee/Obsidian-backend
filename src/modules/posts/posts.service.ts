@@ -357,26 +357,33 @@ export interface PostMetrics {
   likes:       number;
   comments:    number;
   shares:      number;
-  reach:       number | null;   // null = read_insights not granted
+  reach:       number | null;
   impressions: number | null;
+  clicks:      number | null;
+  dev_mode:    boolean;
 }
 
 export async function getPostMetrics(postId: string, userId: string): Promise<PostMetrics> {
   const post = await getById(postId, userId);
 
+  const isDevelopment = process.env.NODE_ENV !== 'production';
+
   if (post.platform !== 'facebook' || !post.platform_post_id) {
-    return { likes: 0, comments: 0, shares: 0, reach: null, impressions: null };
+    return { likes: 0, comments: 0, shares: 0, reach: null, impressions: null, clicks: null, dev_mode: isDevelopment };
   }
 
-  const conn = await getFbConnection(userId);
-  // Prefer the User Token for read operations — NPE Page Tokens don't inherit
-  // pages_read_engagement even when the user granted it during OAuth.
-  const token   = conn.user_access_token ?? conn.access_token;
+  // In development mode skip Graph API calls — permissions aren't fully active
+  if (isDevelopment) {
+    return { likes: 0, comments: 0, shares: 0, reach: null, impressions: null, clicks: null, dev_mode: true };
+  }
+
+  const conn    = await getFbConnection(userId);
+  const token   = conn.access_token;
   const graphId = post.platform_post_id;
 
-  // Fetch basic engagement (likes, comments, shares)
+  // ── Engagement: reactions, comments, shares ───────────────────────────────
   const engUrl = new URL(`https://graph.facebook.com/v21.0/${graphId}`);
-  engUrl.searchParams.set('fields', 'likes.summary(true),comments.summary(true),shares');
+  engUrl.searchParams.set('fields', 'reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0),shares');
   engUrl.searchParams.set('access_token', token);
 
   let likes    = 0;
@@ -387,23 +394,26 @@ export async function getPostMetrics(postId: string, userId: string): Promise<Po
     const engRes = await fetch(engUrl.toString());
     if (engRes.ok) {
       const eng = await engRes.json() as {
-        likes?:    { summary: { total_count: number } };
-        comments?: { summary: { total_count: number } };
-        shares?:   { count: number };
+        reactions?: { summary: { total_count: number } };
+        comments?:  { summary: { total_count: number } };
+        shares?:    { count: number };
       };
-      likes    = eng.likes?.summary?.total_count    ?? 0;
-      comments = eng.comments?.summary?.total_count ?? 0;
-      shares   = eng.shares?.count                  ?? 0;
+      likes    = eng.reactions?.summary?.total_count ?? 0;
+      comments = eng.comments?.summary?.total_count  ?? 0;
+      shares   = eng.shares?.count                   ?? 0;
+    } else {
+      const body = await engRes.json().catch(() => ({}));
+      console.warn('[METRICS] engagement failed:', engRes.status, body);
     }
-  } catch { /* pages_read_engagement not granted */ }
+  } catch (e) { console.warn('[METRICS] engagement error:', e); }
 
-  // Fetch reach + impressions via Page Insights (requires read_insights scope)
-  let reach:       number | null = null;
+  // ── Insights: impressions, clicks ────────────────────────────────────────
   let impressions: number | null = null;
+  let clicks:      number | null = null;
 
   try {
     const insightsUrl = new URL(`https://graph.facebook.com/v21.0/${graphId}/insights`);
-    insightsUrl.searchParams.set('metric', 'post_impressions,post_impressions_unique,post_engaged_users');
+    insightsUrl.searchParams.set('metric', 'post_impressions,post_clicks');
     insightsUrl.searchParams.set('period', 'lifetime');
     insightsUrl.searchParams.set('access_token', token);
 
@@ -412,11 +422,14 @@ export async function getPostMetrics(postId: string, userId: string): Promise<Po
       const ins = await insRes.json() as { data?: { name: string; values: { value: number }[] }[] };
       for (const item of ins.data ?? []) {
         const val = item.values?.[0]?.value ?? 0;
-        if (item.name === 'post_impressions_unique') reach       = val;
-        if (item.name === 'post_impressions')        impressions = val;
+        if (item.name === 'post_impressions') impressions = val;
+        if (item.name === 'post_clicks')      clicks      = val;
       }
+    } else {
+      const body = await insRes.json().catch(() => ({}));
+      console.warn('[METRICS] insights failed:', insRes.status, body);
     }
-  } catch (e) { console.log('[METRICS] insights error:', e); }
+  } catch (e) { console.warn('[METRICS] insights error:', e); }
 
-  return { likes, comments, shares, reach, impressions };
+  return { likes, comments, shares, reach: null, impressions, clicks, dev_mode: false };
 }
