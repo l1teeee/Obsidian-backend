@@ -5,26 +5,113 @@ import { uid } from '../../lib/uid';
 // ─── Facebook publishing ──────────────────────────────────────────────────────
 
 interface FbConnection extends RowDataPacket {
-  access_token: string;
-  page_id:      string;
-  page_name:    string | null;
+  access_token:      string;
+  user_access_token: string | null;
+  page_id:           string;
+  page_name:         string | null;
+  token_expires_at:  Date | null;
+  scopes:            string;
 }
 
 async function getFbConnection(userId: string): Promise<FbConnection> {
   const [rows] = await pool.query<FbConnection[]>(
-    `SELECT access_token, page_id, page_name
+    `SELECT access_token, user_access_token, page_id, page_name, token_expires_at, scopes
      FROM social_connections
      WHERE user_id = ? AND platform = 'facebook' AND page_id IS NOT NULL AND is_active = 1
      LIMIT 1`,
     [userId],
   );
   if (!rows[0]) throw appError('NO_FB_CONNECTION', 'No Facebook page connected. Connect a Facebook account first.', 422);
-  return rows[0];
+
+  const conn = rows[0];
+
+  // If the stored token is a User Token (has expiry), exchange it for a Page Access Token.
+  // Page Tokens don't expire and have the permissions needed to post on behalf of the page.
+  if (conn.token_expires_at !== null) {
+    try {
+      const url = `https://graph.facebook.com/v21.0/${conn.page_id}?fields=access_token&access_token=${encodeURIComponent(conn.access_token)}`;
+      const res  = await fetch(url);
+      if (res.ok) {
+        const data = await res.json() as { access_token?: string };
+        if (data.access_token) {
+          await pool.query(
+            `UPDATE social_connections SET access_token = ?, token_expires_at = NULL
+             WHERE user_id = ? AND platform = 'facebook' AND page_id = ? AND is_active = 1`,
+            [data.access_token, userId, conn.page_id],
+          );
+          conn.access_token    = data.access_token;
+          conn.token_expires_at = null;
+        }
+      }
+    } catch { /* if exchange fails, attempt publish with user token — FB will reject if insufficient */ }
+  }
+
+  return conn;
 }
 
-async function publishTextToFacebook(userId: string, caption: string): Promise<string> {
+interface FbPublishResult { permalink: string; platformPostId: string }
+
+async function buildFbPermalink(graphId: string): Promise<{ permalink: string; platformPostId: string }> {
+  const [pageId, postId] = graphId.split('_');
+  const permalink = postId
+    ? `https://www.facebook.com/${pageId}/posts/${postId}`
+    : `https://www.facebook.com/${graphId}`;
+  return { permalink, platformPostId: graphId };
+}
+
+async function publishToFacebook(userId: string, caption: string, mediaUrls: string[]): Promise<FbPublishResult> {
   const conn = await getFbConnection(userId);
-  const res  = await fetch(`https://graph.facebook.com/v21.0/${conn.page_id}/feed`, {
+
+  // Single image: use /photos endpoint (supports caption + url)
+  if (mediaUrls.length === 1) {
+    const res = await fetch(`https://graph.facebook.com/v21.0/${conn.page_id}/photos`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ caption, url: mediaUrls[0], access_token: conn.access_token }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: { message: string } };
+      throw appError('FB_PUBLISH_FAILED', body.error?.message ?? `Facebook API error ${res.status}`, 502);
+    }
+    const data = await res.json() as { id: string; post_id?: string };
+    // post_id is the feed post ID (used for metrics); id is the photo object ID
+    const graphId = data.post_id ?? data.id;
+    return buildFbPermalink(graphId);
+  }
+
+  // Multiple images: upload each as unpublished, then attach to feed post
+  if (mediaUrls.length > 1) {
+    const photoIds: string[] = await Promise.all(
+      mediaUrls.map(async (url) => {
+        const res = await fetch(`https://graph.facebook.com/v21.0/${conn.page_id}/photos`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ url, published: false, access_token: conn.access_token }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({})) as { error?: { message: string } };
+          throw appError('FB_PUBLISH_FAILED', body.error?.message ?? `Facebook API error ${res.status}`, 502);
+        }
+        const data = await res.json() as { id: string };
+        return data.id;
+      }),
+    );
+    const attached_media = photoIds.map(id => ({ media_fbid: id }));
+    const res = await fetch(`https://graph.facebook.com/v21.0/${conn.page_id}/feed`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ message: caption, attached_media, access_token: conn.access_token }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: { message: string } };
+      throw appError('FB_PUBLISH_FAILED', body.error?.message ?? `Facebook API error ${res.status}`, 502);
+    }
+    const data = await res.json() as { id: string };
+    return buildFbPermalink(data.id);
+  }
+
+  // Text-only post
+  const res = await fetch(`https://graph.facebook.com/v21.0/${conn.page_id}/feed`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ message: caption, access_token: conn.access_token }),
@@ -34,24 +121,23 @@ async function publishTextToFacebook(userId: string, caption: string): Promise<s
     throw appError('FB_PUBLISH_FAILED', body.error?.message ?? `Facebook API error ${res.status}`, 502);
   }
   const data = await res.json() as { id: string };
-  // FB returns "pageId_postId" — build the standard permalink
-  const [pageId, postId] = data.id.split('_');
-  return postId ? `https://www.facebook.com/${pageId}/posts/${postId}` : `https://www.facebook.com/${data.id}`;
+  return buildFbPermalink(data.id);
 }
 
 interface PostRow extends RowDataPacket {
-  id:           string;
-  user_id:      string;
-  platform:     'meta' | 'linkedin' | 'youtube';
-  post_type:    'post' | 'reel' | 'story' | 'video' | 'carousel';
-  caption:      string | null;
-  media_urls:   string | null;
-  permalink:    string | null;
-  status:       'draft' | 'scheduled' | 'published' | 'inactive' | 'deleted';
-  scheduled_at: Date | null;
-  published_at: Date | null;
-  created_at:   Date;
-  updated_at:   Date;
+  id:               string;
+  user_id:          string;
+  platform:         'meta' | 'linkedin' | 'youtube' | 'facebook' | 'instagram';
+  post_type:        'post' | 'reel' | 'story' | 'video' | 'carousel';
+  caption:          string | null;
+  media_urls:       string | null;
+  permalink:        string | null;
+  platform_post_id: string | null;
+  status:           'draft' | 'scheduled' | 'published' | 'inactive' | 'deleted';
+  scheduled_at:     Date | null;
+  published_at:     Date | null;
+  created_at:       Date;
+  updated_at:       Date;
 }
 
 interface CountRow extends RowDataPacket {
@@ -59,18 +145,19 @@ interface CountRow extends RowDataPacket {
 }
 
 export interface Post {
-  id:           string;
-  user_id:      string;
-  platform:     string;
-  post_type:    string;
-  caption:      string | null;
-  media_urls:   string[] | null;
-  permalink:    string | null;
-  status:       string;
-  scheduled_at: Date | null;
-  published_at: Date | null;
-  created_at:   Date;
-  updated_at:   Date;
+  id:               string;
+  user_id:          string;
+  platform:         string;
+  post_type:        string;
+  caption:          string | null;
+  media_urls:       string[] | null;
+  permalink:        string | null;
+  platform_post_id: string | null;
+  status:           string;
+  scheduled_at:     Date | null;
+  published_at:     Date | null;
+  created_at:       Date;
+  updated_at:       Date;
 }
 
 export interface GetPostsOptions {
@@ -183,11 +270,11 @@ export async function createPost(userId: string, data: CreatePostData): Promise<
   );
 
   // Publish immediately to Facebook if requested
-  if (status === 'published' && data.platform === 'meta') {
-    const permalink = await publishTextToFacebook(userId, data.caption ?? '');
+  if (status === 'published' && data.platform === 'facebook') {
+    const result = await publishToFacebook(userId, data.caption ?? '', data.media_urls ?? []);
     await pool.query(
-      `UPDATE posts SET permalink = ?, published_at = NOW() WHERE id = ?`,
-      [permalink, id],
+      `UPDATE posts SET permalink = ?, platform_post_id = ?, published_at = NOW() WHERE id = ?`,
+      [result.permalink, result.platformPostId, id],
     );
   }
 
@@ -222,13 +309,16 @@ export async function updatePost(id: string, userId: string, data: UpdatePostDat
   );
 
   // Publish to Facebook if the status is being set to published
-  if (data.status === 'published' && data.platform === 'meta') {
+  if (data.status === 'published') {
     const post = await getById(id, userId);
-    if (!post.permalink) {
-      const permalink = await publishTextToFacebook(userId, post.caption ?? '');
+    const effectivePlatform = data.platform ?? post.platform;
+    if (effectivePlatform === 'facebook' && !post.permalink) {
+      const mediaUrls = data.media_urls ?? (post.media_urls ?? []);
+      const caption   = data.caption   ?? post.caption ?? '';
+      const result    = await publishToFacebook(userId, caption, mediaUrls);
       await pool.query(
-        `UPDATE posts SET permalink = ?, published_at = NOW() WHERE id = ?`,
-        [permalink, id],
+        `UPDATE posts SET permalink = ?, platform_post_id = ?, published_at = NOW() WHERE id = ?`,
+        [result.permalink, result.platformPostId, id],
       );
     }
   }
@@ -259,4 +349,74 @@ export async function deletePost(id: string, userId: string): Promise<void> {
     "UPDATE posts SET status = 'deleted' WHERE id = ? AND user_id = ?",
     [id, userId]
   );
+}
+
+// ─── Metrics ─────────────────────────────────────────────────────────────────
+
+export interface PostMetrics {
+  likes:       number;
+  comments:    number;
+  shares:      number;
+  reach:       number | null;   // null = read_insights not granted
+  impressions: number | null;
+}
+
+export async function getPostMetrics(postId: string, userId: string): Promise<PostMetrics> {
+  const post = await getById(postId, userId);
+
+  if (post.platform !== 'facebook' || !post.platform_post_id) {
+    return { likes: 0, comments: 0, shares: 0, reach: null, impressions: null };
+  }
+
+  const conn = await getFbConnection(userId);
+  // Prefer the User Token for read operations — NPE Page Tokens don't inherit
+  // pages_read_engagement even when the user granted it during OAuth.
+  const token   = conn.user_access_token ?? conn.access_token;
+  const graphId = post.platform_post_id;
+
+  // Fetch basic engagement (likes, comments, shares)
+  const engUrl = new URL(`https://graph.facebook.com/v21.0/${graphId}`);
+  engUrl.searchParams.set('fields', 'likes.summary(true),comments.summary(true),shares');
+  engUrl.searchParams.set('access_token', token);
+
+  let likes    = 0;
+  let comments = 0;
+  let shares   = 0;
+
+  try {
+    const engRes = await fetch(engUrl.toString());
+    if (engRes.ok) {
+      const eng = await engRes.json() as {
+        likes?:    { summary: { total_count: number } };
+        comments?: { summary: { total_count: number } };
+        shares?:   { count: number };
+      };
+      likes    = eng.likes?.summary?.total_count    ?? 0;
+      comments = eng.comments?.summary?.total_count ?? 0;
+      shares   = eng.shares?.count                  ?? 0;
+    }
+  } catch { /* pages_read_engagement not granted */ }
+
+  // Fetch reach + impressions via Page Insights (requires read_insights scope)
+  let reach:       number | null = null;
+  let impressions: number | null = null;
+
+  try {
+    const insightsUrl = new URL(`https://graph.facebook.com/v21.0/${graphId}/insights`);
+    insightsUrl.searchParams.set('metric', 'post_impressions,post_impressions_unique,post_engaged_users');
+    insightsUrl.searchParams.set('period', 'lifetime');
+    insightsUrl.searchParams.set('access_token', token);
+
+    const insRes = await fetch(insightsUrl.toString());
+    if (insRes.ok) {
+      const ins = await insRes.json() as { data?: { name: string; values: { value: number }[] }[] };
+      for (const item of ins.data ?? []) {
+        const val = item.values?.[0]?.value ?? 0;
+        if (item.name === 'post_impressions_unique') reach       = val;
+        if (item.name === 'post_impressions')        impressions = val;
+      }
+    }
+  } catch (e) { console.log('[METRICS] insights error:', e); }
+
+  return { likes, comments, shares, reach, impressions };
 }

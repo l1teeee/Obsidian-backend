@@ -52,6 +52,7 @@ export async function initFacebookOAuth(req: FastifyRequest, reply: FastifyReply
     'pages_show_list',
     'pages_manage_posts',
     'pages_read_engagement',
+    'read_insights',
     'instagram_basic',
   ].join(',');
 
@@ -71,10 +72,10 @@ export async function initFacebookOAuth(req: FastifyRequest, reply: FastifyReply
 // ─── Facebook OAuth callback ──────────────────────────────────────────────────
 
 export async function facebookOAuthCallback(
-  req: FastifyRequest<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>,
+  req: FastifyRequest<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string; granted_scopes?: string } }>,
   reply: FastifyReply,
 ) {
-  const { code, state, error } = req.query;
+  const { code, state, error, granted_scopes } = req.query;
   const frontendUrl = env.FRONTEND_URL;
 
   if (error || !code || !state) {
@@ -92,7 +93,7 @@ export async function facebookOAuthCallback(
   }
 
   try {
-    await platformsService.handleFacebookCallback(userId, code);
+    await platformsService.handleFacebookCallback(userId, code, granted_scopes);
     reply.redirect(`${frontendUrl}/platforms?connected=success`);
   } catch (err) {
     const msg = (err as Error).message ?? 'Failed to connect account';

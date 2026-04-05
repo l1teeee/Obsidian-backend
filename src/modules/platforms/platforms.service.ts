@@ -271,7 +271,7 @@ export async function deleteConnection(id: string, userId: string): Promise<void
  * 3. Fetch user profile + pages (+ IG accounts linked to pages)
  * 4. Upsert one row per FB page (platform=facebook) and one per IG account (platform=instagram)
  */
-export async function handleFacebookCallback(userId: string, code: string): Promise<void> {
+export async function handleFacebookCallback(userId: string, code: string, grantedScopes?: string): Promise<void> {
   // 1. Short-lived token
   const shortToken = await exchangeCodeForToken(code);
 
@@ -281,6 +281,8 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
   const userToken    = longToken.access_token;
   const expiresInSec = longToken.expires_in ?? 5_184_000; // 60 days default
   const expiresAt    = new Date(Date.now() + expiresInSec * 1000);
+  // Use scopes Facebook actually confirmed granting (return_scopes=true in OAuth URL)
+  const actualScopes = grantedScopes ?? 'pages_show_list,pages_read_engagement,pages_manage_posts';
 
   // 3. User profile
   const me = await fbGet<FbMeResponse>('/me', userToken, {
@@ -308,14 +310,39 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
       );
 
       if (existing.length > 0) {
-        // Restore the row with the new token, preserving page_id / page_name / ig_business_id
+        // /me/accounts returned empty but we have a previously saved page_id.
+        // Fetch the Page Access Token directly from the Graph API using the page_id —
+        // this works even for NPE pages that don't appear in /me/accounts.
+        const [existingRow] = await dbConn.query<SocialConnectionRow[]>(
+          `SELECT page_id FROM social_connections WHERE id = ?`,
+          [existing[0].id],
+        );
+        const pageId    = existingRow[0]?.page_id;
+        let   pageToken = userToken;          // fallback to user token if exchange fails
+        let   pageExpiry: Date | null = expiresAt; // user token expiry as fallback
+
+        if (pageId) {
+          try {
+            const pageTokenUrl = new URL(`https://graph.facebook.com/v21.0/${pageId}`);
+            pageTokenUrl.searchParams.set('fields',       'access_token');
+            pageTokenUrl.searchParams.set('access_token', userToken);
+            const ptRes = await fetch(pageTokenUrl.toString());
+            if (ptRes.ok) {
+              const ptData = await ptRes.json() as { access_token?: string };
+              if (ptData.access_token) {
+                pageToken  = ptData.access_token;
+                pageExpiry = null; // Page Tokens don't expire
+              }
+            }
+          } catch { /* use userToken fallback */ }
+        }
+
         await dbConn.query(
           `UPDATE social_connections
-           SET is_active = 1, access_token = ?, account_name = ?, account_picture = ?,
-               token_expires_at = ?, scopes = ?, updated_at = NOW()
+           SET is_active = 1, access_token = ?, user_access_token = ?, token_expires_at = ?,
+               account_name = ?, account_picture = ?, updated_at = NOW()
            WHERE id = ?`,
-          [userToken, me.name, me.picture?.data?.url ?? null, expiresAt,
-           'pages_show_list,pages_read_engagement,pages_manage_posts', existing[0].id],
+          [pageToken, userToken, pageExpiry, me.name, me.picture?.data?.url ?? null, existing[0].id],
         );
       } else {
         // Truly no pages — save personal FB profile as fallback
@@ -348,24 +375,25 @@ export async function handleFacebookCallback(userId: string, code: string): Prom
       await dbConn.query(
         `INSERT INTO social_connections
            (id, user_id, platform, platform_account_id, account_name, account_picture,
-            access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
-         VALUES (?, ?, 'facebook', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            access_token, user_access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
+         VALUES (?, ?, 'facebook', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
-           account_name     = VALUES(account_name),
-           account_picture  = VALUES(account_picture),
-           access_token     = VALUES(access_token),
-           token_expires_at = VALUES(token_expires_at),
-           page_id          = VALUES(page_id),
-           page_name        = VALUES(page_name),
-           ig_business_id   = VALUES(ig_business_id),
-           is_active        = 1,
-           scopes           = VALUES(scopes),
-           updated_at       = CURRENT_TIMESTAMP`,
+           account_name       = VALUES(account_name),
+           account_picture    = VALUES(account_picture),
+           access_token       = VALUES(access_token),
+           user_access_token  = VALUES(user_access_token),
+           token_expires_at   = VALUES(token_expires_at),
+           page_id            = VALUES(page_id),
+           page_name          = VALUES(page_name),
+           ig_business_id     = VALUES(ig_business_id),
+           is_active          = 1,
+           scopes             = VALUES(scopes),
+           updated_at         = CURRENT_TIMESTAMP`,
         [
           fbId, userId, me.id, me.name, me.picture?.data?.url ?? null,
-          page.access_token, null,
+          page.access_token, userToken, null,
           page.id, page.name, igAccountId,
-          'pages_show_list,pages_read_engagement,pages_manage_posts',
+          actualScopes,
         ],
       );
 

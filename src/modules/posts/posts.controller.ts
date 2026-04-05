@@ -56,6 +56,14 @@ export async function deactivatePostHandler(
   reply.send({ success: true, data: post });
 }
 
+export async function getPostMetricsHandler(
+  request: FastifyRequest<{ Params: PostIdParam }>,
+  reply: FastifyReply
+): Promise<void> {
+  const metrics = await postsService.getPostMetrics(request.params.id, request.user.id);
+  reply.send({ success: true, data: metrics });
+}
+
 export async function deletePostHandler(
   request: FastifyRequest<{ Params: PostIdParam }>,
   reply: FastifyReply

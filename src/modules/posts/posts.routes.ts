@@ -19,6 +19,8 @@ const postsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.put('/:id', { schema: updatePostSchema }, controller.updatePostHandler);
 
+  fastify.get('/:id/metrics', { schema: getPostByIdSchema }, controller.getPostMetricsHandler);
+
   fastify.patch('/:id/deactivate', controller.deactivatePostHandler);
 
   fastify.delete('/:id', { schema: deletePostSchema }, controller.deletePostHandler);
