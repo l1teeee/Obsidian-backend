@@ -150,7 +150,7 @@ export async function getFacebookSummary(userId: string): Promise<FacebookSummar
       fields: 'fan_count',
     }),
     fbGet<FbInsightsResponse>(`/${page_id}/insights`, access_token, {
-      metric: 'page_impressions,page_reach,page_engaged_users,page_post_engagements',
+      metric: 'page_impressions,page_impressions_unique,page_engaged_users',
       period: 'day',
       since:  sinceUnix,
       until:  untilUnix,
@@ -160,7 +160,7 @@ export async function getFacebookSummary(userId: string): Promise<FacebookSummar
   return {
     fan_count:         pageFields.fan_count ?? 0,
     impressions_30d:   sumMetric(insights.data, 'page_impressions'),
-    reach_30d:         sumMetric(insights.data, 'page_reach'),
+    reach_30d:         sumMetric(insights.data, 'page_impressions_unique'),
     engaged_users_30d: sumMetric(insights.data, 'page_engaged_users'),
     period: {
       since: toDateStr(since),
