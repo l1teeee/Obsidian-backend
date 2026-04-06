@@ -51,6 +51,27 @@ async function getFbConnection(userId: string): Promise<FbConnection> {
 
 interface FbPublishResult { permalink: string; platformPostId: string }
 
+// Extract Facebook Graph post ID (pageId_postId) from a stored permalink.
+// Supports two formats:
+//   https://www.facebook.com/{pageId}/posts/{postId}
+//   https://www.facebook.com/permalink.php?story_fbid={postId}&id={pageId}
+function extractGraphIdFromPermalink(permalink: string | null): string | null {
+  if (!permalink) return null;
+  try {
+    const url = new URL(permalink);
+    // Format: /pageId/posts/postId
+    const pathMatch = url.pathname.match(/^\/(\d+)\/posts\/(\d+)/);
+    if (pathMatch) return `${pathMatch[1]}_${pathMatch[2]}`;
+    // Format: ?story_fbid=postId&id=pageId
+    const storyFbid = url.searchParams.get('story_fbid');
+    const pageId    = url.searchParams.get('id');
+    if (storyFbid && pageId) return `${pageId}_${storyFbid}`;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function buildFbPermalink(graphId: string): Promise<{ permalink: string; platformPostId: string }> {
   const [pageId, postId] = graphId.split('_');
   const permalink = postId
@@ -368,7 +389,14 @@ export async function getPostMetrics(postId: string, userId: string): Promise<Po
 
   const isDevelopment = process.env.NODE_ENV !== 'production';
 
-  if (post.platform !== 'facebook' || !post.platform_post_id) {
+  if (post.platform !== 'facebook') {
+    return { likes: 0, comments: 0, shares: 0, reach: null, impressions: null, clicks: null, dev_mode: isDevelopment };
+  }
+
+  // Resolve graphId: use stored platform_post_id, or extract from permalink as fallback
+  let graphId = post.platform_post_id ?? extractGraphIdFromPermalink(post.permalink);
+
+  if (!graphId) {
     return { likes: 0, comments: 0, shares: 0, reach: null, impressions: null, clicks: null, dev_mode: isDevelopment };
   }
 
@@ -377,9 +405,8 @@ export async function getPostMetrics(postId: string, userId: string): Promise<Po
     return { likes: 0, comments: 0, shares: 0, reach: null, impressions: null, clicks: null, dev_mode: true };
   }
 
-  const conn    = await getFbConnection(userId);
-  const token   = conn.access_token;
-  const graphId = post.platform_post_id;
+  const conn  = await getFbConnection(userId);
+  const token = conn.access_token;
 
   // ── Engagement: reactions, comments, shares ───────────────────────────────
   const engUrl = new URL(`https://graph.facebook.com/v21.0/${graphId}`);
