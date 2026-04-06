@@ -4,7 +4,8 @@ import helmet      from '@fastify/helmet';
 import rateLimit   from '@fastify/rate-limit';
 import cookie      from '@fastify/cookie';
 import jwtPlugin   from '@fastify/jwt';
-import { env } from './config/env';
+import { env }  from './config/env';
+import { pool } from './config/db';
 import authenticatePlugin from './plugins/jwt.plugin';
 import authRoutes         from './modules/auth/auth.routes';
 import postsRoutes        from './modules/posts/posts.routes';
@@ -67,6 +68,18 @@ export function buildApp() {
       success: false,
       error: { code, message },
     });
+  });
+
+  // ── Health check ────────────────────────────────────────────────────────────
+  fastify.get('/health', {
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (_req, reply) => {
+    try {
+      await pool.query('SELECT 1');
+      reply.send({ status: 'ok', timestamp: new Date().toISOString() });
+    } catch {
+      reply.code(503).send({ status: 'unavailable' });
+    }
   });
 
   // ── Routes ──────────────────────────────────────────────────────────────────
