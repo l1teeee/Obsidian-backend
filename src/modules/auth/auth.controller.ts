@@ -95,6 +95,13 @@ export async function loginHandler(
   });
 }
 
+export async function pingHandler(
+  _request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  reply.send({ success: true, data: null });
+}
+
 export async function getSessionsHandler(
   request: FastifyRequest,
   reply: FastifyReply,

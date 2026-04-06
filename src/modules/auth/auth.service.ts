@@ -16,6 +16,7 @@ interface UserRow extends RowDataPacket {
   email_verified:             number;
   email_verification_token:   string | null;
   max_sessions:               number;
+  sessions_invalidated_at:    Date | null;
 }
 
 interface RefreshTokenRow extends RowDataPacket {
@@ -191,9 +192,10 @@ export async function login(
     };
   }
 
-  // Force: revoke all existing sessions
+  // Force: revoke all existing sessions and stamp invalidation time
   if (force) {
     await pool.query('DELETE FROM refresh_tokens WHERE user_id = ?', [user.id]);
+    await pool.query('UPDATE users SET sessions_invalidated_at = NOW() WHERE id = ?', [user.id]);
   }
 
   const profileCompleted = Boolean(user.profile_completed);

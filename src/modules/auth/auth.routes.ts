@@ -38,6 +38,12 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   fastify.get(
+    '/ping',
+    { preHandler: [fastify.authenticate] },
+    controller.pingHandler,
+  );
+
+  fastify.get(
     '/sessions',
     { preHandler: [fastify.authenticate] },
     controller.getSessionsHandler,
