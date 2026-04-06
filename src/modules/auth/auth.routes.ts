@@ -36,6 +36,18 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     { preHandler: [fastify.authenticate] },
     controller.logoutHandler,
   );
+
+  fastify.get(
+    '/sessions',
+    { preHandler: [fastify.authenticate] },
+    controller.getSessionsHandler,
+  );
+
+  fastify.post(
+    '/force-logout',
+    { preHandler: [fastify.authenticate] },
+    controller.forceLogoutHandler,
+  );
 };
 
 export default authRoutes;

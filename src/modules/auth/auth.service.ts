@@ -15,12 +15,26 @@ interface UserRow extends RowDataPacket {
   profile_completed:          number;
   email_verified:             number;
   email_verification_token:   string | null;
+  max_sessions:               number;
 }
 
 interface RefreshTokenRow extends RowDataPacket {
-  id:      number;
-  user_id: string;
-  token:   string;
+  id:          number;
+  user_id:     string;
+  token:       string;
+  device_info: string | null;
+  created_at:  Date;
+}
+
+export interface ActiveSession {
+  id:          number;
+  device_info: string | null;
+  created_at:  string;
+}
+
+export interface SessionConflict {
+  conflict:        true;
+  active_sessions: ActiveSession[];
 }
 
 export interface TokenPair {
@@ -54,11 +68,11 @@ function signTokens(userId: string, email: string, profileCompleted: boolean): O
   return { accessToken, refreshToken };
 }
 
-async function storeRefreshToken(userId: string, token: string): Promise<void> {
+async function storeRefreshToken(userId: string, token: string, deviceInfo?: string): Promise<void> {
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await pool.query<ResultSetHeader>(
-    'INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (?, ?, ?)',
-    [userId, token, expiresAt],
+    'INSERT INTO refresh_tokens (user_id, token, device_info, expires_at) VALUES (?, ?, ?, ?)',
+    [userId, token, deviceInfo ?? null, expiresAt],
   );
 }
 
@@ -139,31 +153,52 @@ export async function resendVerification(email: string): Promise<{ devVerifyToke
   return process.env['NODE_ENV'] !== 'production' ? { devVerifyToken: verificationCode } : {};
 }
 
-export async function login(email: string, password: string): Promise<TokenPair> {
+export async function login(
+  email: string,
+  password: string,
+  deviceInfo?: string,
+  force = false,
+): Promise<TokenPair | SessionConflict> {
   const [rows] = await pool.query<UserRow[]>(
-    'SELECT id, email, password_hash, first_login, profile_completed, email_verified FROM users WHERE email = ? LIMIT 1',
+    'SELECT id, email, password_hash, first_login, profile_completed, email_verified, max_sessions FROM users WHERE email = ? LIMIT 1',
     [email],
   );
 
   const user = rows[0];
 
-  if (!user) {
-    throw appError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
-  }
+  if (!user) throw appError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
 
   const passwordMatch = await bcrypt.compare(password, user.password_hash);
+  if (!passwordMatch) throw appError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
+  if (!user.email_verified) throw appError('EMAIL_NOT_VERIFIED', 'Please verify your email address before signing in', 403);
 
-  if (!passwordMatch) {
-    throw appError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
+  const maxSessions = user.max_sessions ?? 1;
+
+  // Check active session count
+  const [activeSessions] = await pool.query<RefreshTokenRow[]>(
+    'SELECT id, device_info, created_at FROM refresh_tokens WHERE user_id = ? AND expires_at > NOW() ORDER BY created_at DESC',
+    [user.id],
+  );
+
+  if (activeSessions.length >= maxSessions && !force) {
+    return {
+      conflict: true,
+      active_sessions: activeSessions.map(s => ({
+        id:          s.id,
+        device_info: s.device_info,
+        created_at:  s.created_at.toISOString(),
+      })),
+    };
   }
 
-  if (!user.email_verified) {
-    throw appError('EMAIL_NOT_VERIFIED', 'Please verify your email address before signing in', 403);
+  // Force: revoke all existing sessions
+  if (force) {
+    await pool.query('DELETE FROM refresh_tokens WHERE user_id = ?', [user.id]);
   }
 
   const profileCompleted = Boolean(user.profile_completed);
   const tokens = signTokens(user.id, user.email, profileCompleted);
-  await storeRefreshToken(user.id, tokens.refreshToken);
+  await storeRefreshToken(user.id, tokens.refreshToken, deviceInfo);
 
   return { ...tokens, isFirstLogin: Boolean(user.first_login), profileCompleted };
 }
@@ -213,5 +248,21 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
 }
 
 export async function logout(userId: string): Promise<void> {
+  await pool.query('DELETE FROM refresh_tokens WHERE user_id = ?', [userId]);
+}
+
+export async function getSessions(userId: string): Promise<ActiveSession[]> {
+  const [rows] = await pool.query<RefreshTokenRow[]>(
+    'SELECT id, device_info, created_at FROM refresh_tokens WHERE user_id = ? AND expires_at > NOW() ORDER BY created_at DESC',
+    [userId],
+  );
+  return rows.map(r => ({
+    id:          r.id,
+    device_info: r.device_info,
+    created_at:  r.created_at.toISOString(),
+  }));
+}
+
+export async function forceLogoutAll(userId: string): Promise<void> {
   await pool.query('DELETE FROM refresh_tokens WHERE user_id = ?', [userId]);
 }

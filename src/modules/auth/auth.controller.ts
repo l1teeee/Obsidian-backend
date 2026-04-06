@@ -28,8 +28,8 @@ const SID_OPTS = {
   ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
 };
 
-type RegisterBody = { email: string; password: string };
-type LoginBody    = { email: string; password: string; rememberMe?: boolean };
+type RegisterBody  = { email: string; password: string };
+type LoginBody     = { email: string; password: string; rememberMe?: boolean; force?: boolean };
 
 function setSessionCookies(reply: FastifyReply, refreshToken: string, persistent = true): void {
   const maxAge = persistent ? RT_OPTS.maxAge : undefined;
@@ -78,16 +78,38 @@ export async function loginHandler(
   request: FastifyRequest<{ Body: LoginBody }>,
   reply: FastifyReply,
 ): Promise<void> {
-  const { email, password, rememberMe = true } = request.body;
-  const tokens = await authService.login(email, password);
+  const { email, password, rememberMe = true, force = false } = request.body;
+  const deviceInfo = request.headers['user-agent']?.slice(0, 500);
 
-  // rememberMe=true → persistent cookie (7 days); false → session cookie (closes with browser)
-  setSessionCookies(reply, tokens.refreshToken, rememberMe);
+  const result = await authService.login(email, password, deviceInfo, force);
 
+  // Session conflict — return 409 with active session info so frontend can prompt
+  if ('conflict' in result) {
+    return reply.code(409).send({ success: false, error: { code: 'SESSION_LIMIT_EXCEEDED', ...result } });
+  }
+
+  setSessionCookies(reply, result.refreshToken, rememberMe);
   reply.send({
     success: true,
-    data: { accessToken: tokens.accessToken, isFirstLogin: tokens.isFirstLogin, profileCompleted: tokens.profileCompleted },
+    data: { accessToken: result.accessToken, isFirstLogin: result.isFirstLogin, profileCompleted: result.profileCompleted },
   });
+}
+
+export async function getSessionsHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const sessions = await authService.getSessions(request.user.id);
+  reply.send({ success: true, data: sessions });
+}
+
+export async function forceLogoutHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  await authService.forceLogoutAll(request.user.id);
+  clearSessionCookies(reply);
+  reply.send({ success: true, data: null });
 }
 
 export async function refreshHandler(

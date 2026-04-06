@@ -360,16 +360,35 @@ export async function deactivatePost(id: string, userId: string): Promise<Post> 
   return getById(id, userId);
 }
 
-export async function deletePost(id: string, userId: string): Promise<void> {
-  const [check] = await pool.query<PostRow[]>(
-    'SELECT id FROM posts WHERE id = ? AND user_id = ? LIMIT 1',
-    [id, userId]
-  );
-  if (check.length === 0) throw appError('NOT_FOUND', 'Post not found', 404);
+export async function deletePost(id: string, userId: string, removeFromPlatform = false): Promise<{ fbDeleteFailed?: boolean }> {
+  const post = await getById(id, userId);
+
+  let fbDeleteFailed = false;
+
+  // Optionally remove from Facebook before marking deleted in DB
+  if (removeFromPlatform && post.platform === 'facebook' && post.platform_post_id) {
+    try {
+      const conn = await getFbConnection(userId);
+      const url  = new URL(`https://graph.facebook.com/v21.0/${post.platform_post_id}`);
+      url.searchParams.set('access_token', conn.access_token);
+      const res = await fetch(url.toString(), { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        console.warn('[DELETE] Facebook delete failed:', res.status, body);
+        fbDeleteFailed = true;
+      }
+    } catch (e) {
+      console.warn('[DELETE] Facebook delete error:', e);
+      fbDeleteFailed = true;
+    }
+  }
+
   await pool.query(
     "UPDATE posts SET status = 'deleted' WHERE id = ? AND user_id = ?",
-    [id, userId]
+    [id, userId],
   );
+
+  return fbDeleteFailed ? { fbDeleteFailed: true } : {};
 }
 
 // ─── Metrics ─────────────────────────────────────────────────────────────────

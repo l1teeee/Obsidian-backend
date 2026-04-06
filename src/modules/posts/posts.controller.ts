@@ -65,9 +65,10 @@ export async function getPostMetricsHandler(
 }
 
 export async function deletePostHandler(
-  request: FastifyRequest<{ Params: PostIdParam }>,
+  request: FastifyRequest<{ Params: PostIdParam; Querystring: { removeFromPlatform?: string } }>,
   reply: FastifyReply
 ): Promise<void> {
-  await postsService.deletePost(request.params.id, request.user.id);
-  reply.send({ success: true, data: null });
+  const removeFromPlatform = request.query.removeFromPlatform === 'true';
+  const result = await postsService.deletePost(request.params.id, request.user.id, removeFromPlatform);
+  reply.send({ success: true, data: result });
 }
