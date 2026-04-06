@@ -150,7 +150,7 @@ export async function getFacebookSummary(userId: string): Promise<FacebookSummar
       fields: 'fan_count',
     }),
     fbGet<FbInsightsResponse>(`/${page_id}/insights`, access_token, {
-      metric: 'page_impressions,page_impressions_unique,page_engaged_users',
+      metric: 'page_posts_impressions,page_posts_impressions_unique,page_post_engagements',
       period: 'day',
       since:  sinceUnix,
       until:  untilUnix,
@@ -159,9 +159,9 @@ export async function getFacebookSummary(userId: string): Promise<FacebookSummar
 
   return {
     fan_count:         pageFields.fan_count ?? 0,
-    impressions_30d:   sumMetric(insights.data, 'page_impressions'),
-    reach_30d:         sumMetric(insights.data, 'page_impressions_unique'),
-    engaged_users_30d: sumMetric(insights.data, 'page_engaged_users'),
+    impressions_30d:   sumMetric(insights.data, 'page_posts_impressions'),
+    reach_30d:         sumMetric(insights.data, 'page_posts_impressions_unique'),
+    engaged_users_30d: sumMetric(insights.data, 'page_post_engagements'),
     period: {
       since: toDateStr(since),
       until: toDateStr(until),
@@ -179,7 +179,7 @@ export async function getFacebookPosts(userId: string): Promise<PostMetrics[]> {
       'message',
       'created_time',
       'attachments{type,media}',
-      'insights.metric(post_impressions,post_reach,post_engaged_users,post_reactions_by_type_total)',
+      'insights.metric(post_impressions,post_impressions_unique,post_clicks,post_reactions_by_type_total)',
     ].join(','),
     limit: '10',
   });
@@ -205,8 +205,8 @@ export async function getFacebookPosts(userId: string): Promise<PostMetrics[]> {
       created_time:  post.created_time,
       thumbnail,
       impressions:   sumMetric(insightItems, 'post_impressions'),
-      reach:         sumMetric(insightItems, 'post_reach'),
-      engaged_users: sumMetric(insightItems, 'post_engaged_users'),
+      reach:         sumMetric(insightItems, 'post_impressions_unique'),
+      engaged_users: sumMetric(insightItems, 'post_clicks'),
       reactions,
     };
   });
