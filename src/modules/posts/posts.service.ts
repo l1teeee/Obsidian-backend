@@ -408,55 +408,42 @@ export async function getPostMetrics(postId: string, userId: string): Promise<Po
   const conn  = await getFbConnection(userId);
   const token = conn.access_token;
 
-  // ── Engagement: reactions, comments, shares ───────────────────────────────
-  const engUrl = new URL(`https://graph.facebook.com/v21.0/${graphId}`);
-  engUrl.searchParams.set('fields', 'reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0),shares');
-  engUrl.searchParams.set('access_token', token);
+  // Use insights-based fields — same approach as metrics.service.ts which works
+  // with read_insights permission (no pages_read_engagement required).
+  // reactions.summary() and comments.summary() require pages_read_engagement
+  // which is not yet approved by Meta.
+  const fields = [
+    'insights.metric(post_reactions_by_type_total,post_clicks,post_media_view,post_total_media_view_unique)',
+  ].join(',');
 
-  let likes    = 0;
-  let comments = 0;
-  let shares   = 0;
+  const url = new URL(`https://graph.facebook.com/v21.0/${graphId}`);
+  url.searchParams.set('fields', fields);
+  url.searchParams.set('access_token', token);
 
-  try {
-    const engRes = await fetch(engUrl.toString());
-    if (engRes.ok) {
-      const eng = await engRes.json() as {
-        reactions?: { summary: { total_count: number } };
-        comments?:  { summary: { total_count: number } };
-        shares?:    { count: number };
-      };
-      likes    = eng.reactions?.summary?.total_count ?? 0;
-      comments = eng.comments?.summary?.total_count  ?? 0;
-      shares   = eng.shares?.count                   ?? 0;
-    } else {
-      const body = await engRes.json().catch(() => ({}));
-      console.warn('[METRICS] engagement failed:', engRes.status, body);
-    }
-  } catch (e) { console.warn('[METRICS] engagement error:', e); }
-
-  // ── Insights: impressions, clicks ────────────────────────────────────────
+  let likes        = 0;
   let impressions: number | null = null;
+  let reach:       number | null = null;
   let clicks:      number | null = null;
 
   try {
-    const insightsUrl = new URL(`https://graph.facebook.com/v21.0/${graphId}/insights`);
-    insightsUrl.searchParams.set('metric', 'post_impressions,post_clicks');
-    insightsUrl.searchParams.set('period', 'lifetime');
-    insightsUrl.searchParams.set('access_token', token);
-
-    const insRes = await fetch(insightsUrl.toString());
-    if (insRes.ok) {
-      const ins = await insRes.json() as { data?: { name: string; values: { value: number }[] }[] };
-      for (const item of ins.data ?? []) {
-        const val = item.values?.[0]?.value ?? 0;
-        if (item.name === 'post_impressions') impressions = val;
-        if (item.name === 'post_clicks')      clicks      = val;
+    const res = await fetch(url.toString());
+    if (res.ok) {
+      const json = await res.json() as {
+        insights?: { data: { name: string; values: { value: number | Record<string, number> }[] }[] };
+      };
+      for (const item of json.insights?.data ?? []) {
+        const raw = item.values?.[0]?.value ?? 0;
+        const num = typeof raw === 'object' ? Object.values(raw).reduce((a, b) => a + b, 0) : (raw as number);
+        if (item.name === 'post_reactions_by_type_total') likes        = num;
+        if (item.name === 'post_clicks')                  clicks       = num;
+        if (item.name === 'post_media_view')              impressions  = num;
+        if (item.name === 'post_total_media_view_unique') reach        = num;
       }
     } else {
-      const body = await insRes.json().catch(() => ({}));
-      console.warn('[METRICS] insights failed:', insRes.status, body);
+      const body = await res.json().catch(() => ({}));
+      console.warn('[METRICS] post fetch failed:', res.status, body);
     }
-  } catch (e) { console.warn('[METRICS] insights error:', e); }
+  } catch (e) { console.warn('[METRICS] post fetch error:', e); }
 
-  return { likes, comments, shares, reach: null, impressions, clicks, dev_mode: false };
+  return { likes, comments: 0, shares: 0, reach, impressions, clicks, dev_mode: false };
 }
