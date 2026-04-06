@@ -179,7 +179,7 @@ export async function getFacebookPosts(userId: string): Promise<PostMetrics[]> {
       'message',
       'created_time',
       'attachments{type,media}',
-      'insights.metric(post_impressions,post_impressions_unique,post_clicks,post_reactions_by_type_total)',
+      'insights.metric(post_media_view,post_total_media_view_unique,post_clicks,post_reactions_by_type_total)',
     ].join(','),
     limit: '10',
   });
@@ -204,8 +204,8 @@ export async function getFacebookPosts(userId: string): Promise<PostMetrics[]> {
       message:       post.message ?? null,
       created_time:  post.created_time,
       thumbnail,
-      impressions:   sumMetric(insightItems, 'post_impressions'),
-      reach:         sumMetric(insightItems, 'post_impressions_unique'),
+      impressions:   sumMetric(insightItems, 'post_media_view'),
+      reach:         sumMetric(insightItems, 'post_total_media_view_unique'),
       engaged_users: sumMetric(insightItems, 'post_clicks'),
       reactions,
     };
