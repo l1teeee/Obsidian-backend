@@ -1,6 +1,22 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import * as metricsService from './metrics.service';
 
+// ─── GET /metrics/facebook/posts/:postId ─────────────────────────────────────
+
+export async function getFacebookPostById(
+  req: FastifyRequest<{ Params: { postId: string } }>,
+  reply: FastifyReply,
+) {
+  const userId = (req.user as { id: string }).id;
+  try {
+    const data = await metricsService.getFacebookPostById(userId, req.params.postId);
+    reply.send({ success: true, data });
+  } catch (err) {
+    const { status, code, message } = metricsService.classifyGraphError(err);
+    reply.code(status).send({ success: false, error: { code, message } });
+  }
+}
+
 // ─── GET /metrics/facebook/summary ───────────────────────────────────────────
 
 export async function getFacebookSummary(req: FastifyRequest, reply: FastifyReply) {
