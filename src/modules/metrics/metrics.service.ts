@@ -138,12 +138,28 @@ export async function getFacebookSummary(userId: string): Promise<FacebookSummar
 export async function getFacebookPosts(userId: string): Promise<PostMetrics[]> {
   const { page_id, access_token } = await getFacebookConnection(userId);
 
-  const res = await fbGet<FbPostsResponse>(`/${page_id}/posts`, access_token, {
-    fields: POST_FIELDS,
-    limit:  '10',
-  });
+  // Fetch from Facebook and get the user's active local posts in parallel
+  const [fbRes, [localRows]] = await Promise.all([
+    fbGet<FbPostsResponse>(`/${page_id}/posts`, access_token, {
+      fields: POST_FIELDS,
+      limit:  '20',
+    }),
+    pool.query<({ platform_post_id: string } & import('mysql2').RowDataPacket)[]>(
+      `SELECT platform_post_id
+         FROM posts
+        WHERE user_id = ?
+          AND platform = 'facebook'
+          AND platform_post_id IS NOT NULL
+          AND status NOT IN ('inactive', 'deleted')`,
+      [userId],
+    ),
+  ]);
 
-  return res.data.map(mapPost);
+  // Only include FB posts that were created through the app by this user
+  const allowedIds = new Set(localRows.map(r => r.platform_post_id));
+  const filtered   = fbRes.data.filter(p => allowedIds.has(p.id));
+
+  return filtered.map(mapPost);
 }
 
 export async function getFacebookPostById(userId: string, postId: string): Promise<PostMetrics> {
