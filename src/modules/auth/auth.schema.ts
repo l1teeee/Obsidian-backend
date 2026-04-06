@@ -19,6 +19,7 @@ export const loginSchema = {
       email:      { type: 'string', format: 'email' },
       password:   { type: 'string', minLength: 1 },
       rememberMe: { type: 'boolean' },
+      force:      { type: 'boolean' },
     },
   },
 };
