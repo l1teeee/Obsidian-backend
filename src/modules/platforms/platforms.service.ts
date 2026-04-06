@@ -241,6 +241,107 @@ export async function linkInstagramFromExistingPages(userId: string): Promise<nu
   return count;
 }
 
+// ─── Instagram direct OAuth (Camino B) ───────────────────────────────────────
+
+/**
+ * Handle the Instagram direct OAuth callback:
+ * 1. Exchange code → short-lived token (api.instagram.com)
+ * 2. Extend to long-lived token (~60 days, graph.instagram.com)
+ * 3. Fetch IG profile (/me with fields)
+ * 4. Upsert in social_connections
+ *
+ * Uses the same Facebook App ID/Secret (add the Instagram product to the Meta app).
+ */
+export async function handleInstagramDirectCallback(userId: string, code: string): Promise<void> {
+  // 1. Exchange code for short-lived token
+  const shortRes = await fetch('https://api.instagram.com/oauth/access_token', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    new URLSearchParams({
+      client_id:     env.FACEBOOK_CLIENT_ID,
+      client_secret: env.FACEBOOK_CLIENT_SECRET,
+      grant_type:    'authorization_code',
+      redirect_uri:  env.INSTAGRAM_REDIRECT_URL,
+      code,
+    }),
+  });
+
+  if (!shortRes.ok) {
+    const err = await shortRes.json().catch(() => ({})) as { error_message?: string; error_description?: string };
+    throw new Error(err.error_message ?? err.error_description ?? `Instagram token exchange failed (${shortRes.status})`);
+  }
+
+  const { access_token: shortToken } = await shortRes.json() as { access_token: string; user_id: string };
+
+  // 2. Exchange for long-lived token (~60 days)
+  const longUrl = new URL('https://graph.instagram.com/access_token');
+  longUrl.searchParams.set('grant_type',    'ig_exchange_token');
+  longUrl.searchParams.set('client_secret', env.FACEBOOK_CLIENT_SECRET);
+  longUrl.searchParams.set('access_token',  shortToken);
+
+  const longRes = await fetch(longUrl.toString());
+  if (!longRes.ok) {
+    const err = await longRes.json().catch(() => ({})) as { error?: { message: string } };
+    throw new Error(err.error?.message ?? `Instagram token extension failed (${longRes.status})`);
+  }
+
+  const { access_token: longToken, expires_in } = await longRes.json() as {
+    access_token: string;
+    token_type:   string;
+    expires_in:   number;
+  };
+
+  const expiresAt = new Date(Date.now() + (expires_in ?? 5_184_000) * 1000);
+
+  // 3. Fetch IG profile
+  const meUrl = new URL('https://graph.instagram.com/me');
+  meUrl.searchParams.set('fields',       'id,name,username,profile_picture_url,account_type');
+  meUrl.searchParams.set('access_token', longToken);
+
+  const meRes = await fetch(meUrl.toString());
+  if (!meRes.ok) {
+    const err = await meRes.json().catch(() => ({})) as { error?: { message: string } };
+    throw new Error(err.error?.message ?? `Instagram profile fetch failed (${meRes.status})`);
+  }
+
+  const me = await meRes.json() as {
+    id:                    string;
+    name?:                 string;
+    username?:             string;
+    profile_picture_url?:  string;
+    account_type?:         string;
+  };
+
+  // 4. Upsert in social_connections
+  const id = uid();
+  await pool.query(
+    `INSERT INTO social_connections
+       (id, user_id, platform, platform_account_id, account_name, account_picture,
+        access_token, token_expires_at, page_id, page_name, ig_business_id, account_type, scopes)
+     VALUES (?, ?, 'instagram', ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       account_name     = VALUES(account_name),
+       account_picture  = VALUES(account_picture),
+       access_token     = VALUES(access_token),
+       token_expires_at = VALUES(token_expires_at),
+       account_type     = VALUES(account_type),
+       is_active        = 1,
+       scopes           = VALUES(scopes),
+       updated_at       = CURRENT_TIMESTAMP`,
+    [
+      id, userId,
+      me.id,
+      me.username ?? me.name ?? 'Instagram',
+      me.profile_picture_url ?? null,
+      longToken,
+      expiresAt,
+      me.id,
+      me.account_type ?? null,
+      'instagram_business_basic,instagram_business_content_publish',
+    ],
+  );
+}
+
 export async function listConnections(userId: string): Promise<SocialConnection[]> {
   const [rows] = await pool.query<SocialConnectionRow[]>(
     `SELECT id, user_id, platform, platform_account_id, account_name, account_picture,

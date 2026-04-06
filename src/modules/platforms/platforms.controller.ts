@@ -69,6 +69,60 @@ export async function initFacebookOAuth(req: FastifyRequest, reply: FastifyReply
   reply.send({ success: true, data: { url: authUrl.toString() } });
 }
 
+// ─── Instagram direct OAuth (Camino B) ───────────────────────────────────────
+
+export async function initInstagramDirectOAuth(req: FastifyRequest, reply: FastifyReply) {
+  if (!env.FACEBOOK_CLIENT_ID) {
+    return reply.code(503).send({ success: false, error: { code: 'NOT_CONFIGURED', message: 'Instagram OAuth is not configured' } });
+  }
+
+  const userId = (req.user as { id: string }).id;
+  const state  = req.server.jwt.sign({ userId, ts: Date.now() }, { expiresIn: '10m' });
+
+  const scopes = [
+    'instagram_business_basic',
+    'instagram_business_content_publish',
+  ].join(',');
+
+  const authUrl = new URL('https://www.instagram.com/oauth/authorize');
+  authUrl.searchParams.set('client_id',     env.FACEBOOK_CLIENT_ID);
+  authUrl.searchParams.set('redirect_uri',  env.INSTAGRAM_REDIRECT_URL);
+  authUrl.searchParams.set('scope',         scopes);
+  authUrl.searchParams.set('state',         state);
+  authUrl.searchParams.set('response_type', 'code');
+
+  reply.send({ success: true, data: { url: authUrl.toString() } });
+}
+
+export async function instagramDirectOAuthCallback(
+  req: FastifyRequest<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>,
+  reply: FastifyReply,
+) {
+  const { code, state, error } = req.query;
+  const frontendUrl = env.FRONTEND_URL;
+
+  if (error || !code || !state) {
+    const msg = req.query.error_description ?? error ?? 'OAuth cancelled';
+    return reply.redirect(`${frontendUrl}/platforms?error=${encodeURIComponent(msg)}`);
+  }
+
+  let userId: string;
+  try {
+    const payload = req.server.jwt.verify<{ userId: string }>(state);
+    userId = payload.userId;
+  } catch {
+    return reply.redirect(`${frontendUrl}/platforms?error=${encodeURIComponent('Invalid OAuth state')}`);
+  }
+
+  try {
+    await platformsService.handleInstagramDirectCallback(userId, code);
+    reply.redirect(`${frontendUrl}/platforms?connected=success`);
+  } catch (err) {
+    const msg = (err as Error).message ?? 'Failed to connect Instagram account';
+    reply.redirect(`${frontendUrl}/platforms?error=${encodeURIComponent(msg)}`);
+  }
+}
+
 // ─── Facebook OAuth callback ──────────────────────────────────────────────────
 
 export async function facebookOAuthCallback(

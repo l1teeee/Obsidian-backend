@@ -5,6 +5,8 @@ import {
   connectInstagramFromPages,
   initFacebookOAuth,
   facebookOAuthCallback,
+  initInstagramDirectOAuth,
+  instagramDirectOAuthCallback,
 } from './platforms.controller';
 
 export default async function platformsRoutes(fastify: FastifyInstance) {
@@ -39,5 +41,17 @@ export default async function platformsRoutes(fastify: FastifyInstance) {
   fastify.get<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>(
     '/connect/facebook/callback',
     facebookOAuthCallback,
+  );
+
+  // Instagram direct OAuth (Camino B — no Facebook required)
+  fastify.get(
+    '/connect/instagram/oauth',
+    { onRequest: [fastify.authenticate] },
+    initInstagramDirectOAuth,
+  );
+
+  fastify.get<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>(
+    '/connect/instagram/oauth/callback',
+    instagramDirectOAuthCallback,
   );
 }
