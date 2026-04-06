@@ -156,10 +156,10 @@ export async function getFacebookPosts(userId: string): Promise<PostMetrics[]> {
   ]);
 
   // Only include FB posts that were created through the app by this user
-  const allowedIds = new Set(localRows.map(r => r.platform_post_id));
-  const filtered   = fbRes.data.filter(p => allowedIds.has(p.id));
+  const idMap    = new Map(localRows.map(r => [r.platform_post_id, r.id]));
+  const filtered = fbRes.data.filter(p => idMap.has(p.id));
 
-  return filtered.map(mapPost);
+  return filtered.map(p => ({ ...mapPost(p), local_id: idMap.get(p.id) }));
 }
 
 export async function getFacebookPostById(userId: string, postId: string): Promise<PostMetrics> {

@@ -53,6 +53,7 @@ export interface FbPostsResponse {
 
 export interface PostMetrics {
   id:            string;
+  local_id?:     string;   // local DB post id — set when returned from getFacebookPosts
   message:       string | null;
   created_time:  string;
   thumbnail:     string | null;
