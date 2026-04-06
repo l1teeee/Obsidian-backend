@@ -38,6 +38,7 @@ export const env = {
   FACEBOOK_CLIENT_SECRET: process.env['FACEBOOK_CLIENT_SECRET'] ?? '',
   FACEBOOK_REDIRECT_URL:  process.env['FACEBOOK_REDIRECT_URL']  ?? 'http://localhost:3000/platforms/connect/facebook/callback',
   FRONTEND_URL:           process.env['FRONTEND_URL']           ?? 'http://localhost:5173',
+  COOKIE_DOMAIN:          process.env['COOKIE_DOMAIN']          ?? '',
   // Instagram direct OAuth (Camino B — same App ID/Secret as Facebook, different redirect URI)
   INSTAGRAM_REDIRECT_URL: process.env['INSTAGRAM_REDIRECT_URL'] ?? 'http://localhost:3000/platforms/connect/instagram/oauth/callback',
 } as const;

@@ -1,5 +1,6 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
 import * as authService from './auth.service';
+import { env } from '../../config/env';
 
 type VerifyEmailBody  = { email: string; code: string };
 type ResendVerifyBody = { email: string };
@@ -24,6 +25,7 @@ const SID_OPTS = {
   sameSite: 'lax' as const,
   path:     '/',              // must be accessible on all frontend routes
   maxAge:   7 * 24 * 60 * 60,
+  ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
 };
 
 type RegisterBody = { email: string; password: string };
