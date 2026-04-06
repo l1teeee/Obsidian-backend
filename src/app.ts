@@ -73,12 +73,11 @@ export function buildApp() {
   // ── Health check ────────────────────────────────────────────────────────────
   fastify.get('/health', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
-  }, async (req, reply) => {
+  }, async (_req, reply) => {
     try {
       await pool.query('SELECT 1');
       reply.send({ status: 'ok', timestamp: new Date().toISOString() });
-    } catch (err) {
-      req.log.error({ err }, 'Health check: DB query failed');
+    } catch {
       reply.code(503).send({ status: 'unavailable' });
     }
   });
