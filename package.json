@@ -5,6 +5,7 @@
   "main": "dist/server.js",
   "type": "commonjs",
   "scripts": {
+    "predev": "node -e \"console.log('\\n\\x1b[41m\\x1b[1m  🚨 MODO PRODUCCIÓN ACTIVO  \\x1b[0m\\n\\x1b[33mEstás conectado a la base de datos de PRODUCCIÓN.\\nCualquier cambio afectará datos reales.\\x1b[0m\\n\\n\\x1b[36mAntes de continuar, asegúrate de tener activo el túnel SSH:\\x1b[0m\\n\\x1b[1mssh -i \\\"C:\\\\\\\\Users\\\\\\\\aleja\\\\\\\\Downloads\\\\\\\\vielink.pem\\\" -N -L 3307:127.0.0.1:3306 ubuntu@52.54.126.163\\x1b[0m\\n\\n\\x1b[33m⚠️  No cierres la terminal del túnel mientras trabajas.\\x1b[0m\\n')\"",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js"
