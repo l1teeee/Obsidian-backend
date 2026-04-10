@@ -12,6 +12,16 @@ export interface GenerateImageResult {
   revised_prompt: string;
 }
 
+export interface EditImageOptions {
+  imageDataUrl: string;   // 1024×1024 PNG, base64 data URL — prepared by the client
+  maskDataUrl:  string;   // 1024×1024 fully-transparent PNG — lets model edit everywhere
+  instruction:  string;   // what the user wants to change
+}
+
+export interface EditImageResult {
+  dataUrl: string;        // data:image/png;base64,...
+}
+
 export async function generateImage(options: GenerateImageOptions): Promise<GenerateImageResult> {
   if (!env.OPENAI_API_KEY) {
     throw appError(
@@ -55,6 +65,60 @@ export async function generateImage(options: GenerateImageOptions): Promise<Gene
     dataUrl:        `data:image/png;base64,${image.b64_json}`,
     revised_prompt: image.revised_prompt ?? options.prompt,
   };
+}
+
+export async function editImage(options: EditImageOptions): Promise<EditImageResult> {
+  if (!env.OPENAI_API_KEY) {
+    throw appError(
+      'AI_NOT_CONFIGURED',
+      'OpenAI API key not configured. Set OPENAI_API_KEY in the server environment.',
+      503,
+    );
+  }
+
+  function base64ToBuffer(dataUrl: string): Buffer {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    return Buffer.from(base64, 'base64');
+  }
+
+  const imageBuffer = base64ToBuffer(options.imageDataUrl);
+  const maskBuffer  = base64ToBuffer(options.maskDataUrl);
+
+  // Prompt enforces minimal changes — the structural rule for this feature.
+  const prompt =
+    `Apply only this specific change: ${options.instruction}. ` +
+    `Do not alter anything else. Preserve all other elements — ` +
+    `composition, colors, background, lighting, style, and subjects — exactly as they are.`;
+
+  const formData = new FormData();
+  formData.append('model',           'dall-e-2');
+  formData.append('image',           new File([imageBuffer], 'image.png', { type: 'image/png' }));
+  formData.append('mask',            new File([maskBuffer],  'mask.png',  { type: 'image/png' }));
+  formData.append('prompt',          prompt);
+  formData.append('n',               '1');
+  formData.append('size',            '1024x1024');
+  formData.append('response_format', 'b64_json');
+
+  const res = await fetch('https://api.openai.com/v1/images/edits', {
+    method:  'POST',
+    headers: { 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+    body:    formData,
+  });
+
+  if (!res.ok) {
+    interface OpenAIError { error?: { message: string } }
+    const body = await res.json() as OpenAIError;
+    throw appError('AI_ERROR', body.error?.message ?? 'DALL-E edit failed', 502);
+  }
+
+  interface EditResponse {
+    data: Array<{ b64_json: string }>;
+  }
+  const data = await res.json() as EditResponse;
+  const b64  = data.data[0]?.b64_json;
+  if (!b64) throw appError('AI_ERROR', 'Empty response from DALL-E edit', 502);
+
+  return { dataUrl: `data:image/png;base64,${b64}` };
 }
 
 export interface InspireOptions {
@@ -103,17 +167,71 @@ function platformLabel(platform?: string): string {
   return platform ? (map[platform] ?? platform) : 'social media';
 }
 
-function buildContextBlock(s: AiSettings): string {
-  const lines: string[] = [];
-  if (s.persona)             lines.push(`Brand/Creator: ${s.persona}`);
-  if (s.brand_voice)         lines.push(`Voice & Tone: ${s.brand_voice}`);
-  if (s.target_audience)     lines.push(`Target Audience: ${s.target_audience}`);
-  if (s.content_pillars)     lines.push(`Content Pillars: ${s.content_pillars}`);
-  if (s.hashtag_strategy)    lines.push(`Hashtag Strategy: ${s.hashtag_strategy}`);
-  if (s.example_posts)       lines.push(`Style Reference Posts:\n${s.example_posts}`);
-  if (s.avoid)               lines.push(`Avoid: ${s.avoid}`);
-  if (s.custom_instructions) lines.push(`Extra Instructions: ${s.custom_instructions}`);
-  return lines.join('\n');
+/**
+ * Builds the system prompt entirely from the user's AI Settings.
+ * Hardcoded content is kept to the absolute minimum (only what the model
+ * technically needs: role fallback, image instruction, output format hint).
+ * Everything stylistic — tone, persona, hashtags, avoid list — comes from settings.
+ */
+function buildSystemPrompt(
+  settings:  AiSettings | null,
+  platform:  string,
+  hasImages: boolean,
+): string {
+  const parts: string[] = [];
+
+  // ── 1. Role / Persona ─────────────────────────────────────────────────────
+  // Use the user's persona as the role definition. Only fall back to a
+  // minimal generic description when no settings exist at all.
+  if (settings?.persona?.trim()) {
+    parts.push(`You are creating social media content for the following brand:\n${settings.persona.trim()}`);
+  } else {
+    parts.push(`You are a social media content creator for ${platform}.`);
+  }
+
+  // ── 2. Voice & Tone ───────────────────────────────────────────────────────
+  if (settings?.brand_voice?.trim()) {
+    parts.push(`\n## Voice & Tone\n${settings.brand_voice.trim()}`);
+  }
+
+  // ── 3. Target Audience ────────────────────────────────────────────────────
+  if (settings?.target_audience?.trim()) {
+    parts.push(`\n## Target Audience\n${settings.target_audience.trim()}`);
+  }
+
+  // ── 4. Content Pillars ────────────────────────────────────────────────────
+  if (settings?.content_pillars?.trim()) {
+    parts.push(`\n## Content Pillars\n${settings.content_pillars.trim()}`);
+  }
+
+  // ── 5. Style Reference ────────────────────────────────────────────────────
+  // This is the highest-signal section: show the model exactly what the
+  // brand's published content looks and sounds like.
+  if (settings?.example_posts?.trim()) {
+    parts.push(`\n## Style Reference\nMatch the style, structure, and voice of these example posts exactly:\n${settings.example_posts.trim()}`);
+  }
+
+  // ── 6. Hashtag Strategy ───────────────────────────────────────────────────
+  if (settings?.hashtag_strategy?.trim()) {
+    parts.push(`\n## Hashtag Strategy\n${settings.hashtag_strategy.trim()}`);
+  }
+
+  // ── 7. Avoid ─────────────────────────────────────────────────────────────
+  if (settings?.avoid?.trim()) {
+    parts.push(`\n## STRICTLY AVOID — treat these as hard rules, never break them:\n${settings.avoid.trim()}`);
+  }
+
+  // ── 8. Custom Instructions ────────────────────────────────────────────────
+  if (settings?.custom_instructions?.trim()) {
+    parts.push(`\n## Additional Instructions\n${settings.custom_instructions.trim()}`);
+  }
+
+  // ── 9. Image analysis (technical, only when images are attached) ──────────
+  if (hasImages) {
+    parts.push(`\n## Image Analysis\nImages are attached. Analyze their visual content, mood, colors, subjects, and story. Let the images inspire and shape the captions directly.`);
+  }
+
+  return parts.join('\n');
 }
 
 export interface SuggestTimeOptions {
@@ -204,13 +322,14 @@ Return ONLY a JSON object (no markdown, no explanation):
 
   if (!content) throw appError('AI_ERROR', 'Empty response from OpenAI', 502);
 
-  const cleaned = content
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '')
-    .trim();
+  const stJsonStart = content.indexOf('{');
+  const stJsonEnd   = content.lastIndexOf('}');
+  const stCleaned   = stJsonStart !== -1 && stJsonEnd > stJsonStart
+    ? content.slice(stJsonStart, stJsonEnd + 1)
+    : content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
 
   let parsed: unknown;
-  try { parsed = JSON.parse(cleaned); }
+  try { parsed = JSON.parse(stCleaned); }
   catch { throw appError('AI_ERROR', 'Could not parse AI response as JSON', 502); }
 
   const r = parsed as { hour?: unknown; minute?: unknown; dayOffset?: unknown; reason?: unknown };
@@ -225,6 +344,62 @@ Return ONLY a JSON object (no markdown, no explanation):
     reason:    typeof r.reason === 'string' ? r.reason : '',
   };
 }
+
+// ── analyzeImageForPost ───────────────────────────────────────────────────────
+
+export interface AnalyzeImageOptions {
+  imageUrls:    string[];   // base64 data: URIs or validated HTTPS URLs (up to 4)
+  platforms:    string[];   // e.g. ['meta', 'linkedin']
+  workspaceId?: string;
+  userId?:      string;
+  currentHour?: number;     // client local hour 0-23
+  weekday?:     string;     // 'Thursday'
+}
+
+export interface AnalyzeImageResult {
+  captions: string[];
+  hashtags: string[];
+  bestTime: {
+    hour:      number;    // 0-23
+    minute:    number;    // 0 or 30
+    dayOffset: number;    // 0 = today, 1 = tomorrow …
+    reason:    string;
+  };
+}
+
+export async function analyzeImageForPost(options: AnalyzeImageOptions): Promise<AnalyzeImageResult> {
+  if (!env.OPENAI_API_KEY) {
+    throw appError('AI_NOT_CONFIGURED', 'OpenAI API key not configured.', 503);
+  }
+
+  const { imageUrls, platforms, workspaceId, userId, currentHour, weekday } = options;
+
+  const platform = platforms[0] ?? 'meta';
+
+  // Step 1: reuse the proven inspire/caption flow (supports vision, already works)
+  const inspire = await generateCaptionSuggestions({
+    platform,
+    workspaceId,
+    userId,
+    imageUrls,
+  });
+
+  // Step 2: suggest best posting time based on the generated caption
+  const time = await suggestScheduleTime({
+    caption:     inspire.captions[0] ?? '',
+    platforms,
+    currentHour,
+    weekday,
+  });
+
+  return {
+    captions: inspire.captions,
+    hashtags: inspire.hashtags,
+    bestTime: time,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export async function generateCaptionSuggestions(options: InspireOptions): Promise<InspireResult> {
   if (!env.OPENAI_API_KEY) {
@@ -243,56 +418,43 @@ export async function generateCaptionSuggestions(options: InspireOptions): Promi
   const hasImages   = safeUrls.length > 0;
   const platformCtx = platformLabel(platform);
 
-  // Load saved AI settings context if available — enforces workspace ownership
-  let contextBlock = '';
+  // Load AI settings — the user's configuration is the primary prompt source.
+  // Both workspaceId and userId are required to enforce ownership.
+  let settings: AiSettings | null = null;
   if (workspaceId && userId) {
-    const settings = await getByWorkspace(workspaceId, userId);
-    if (settings) contextBlock = buildContextBlock(settings);
+    settings = await getByWorkspace(workspaceId, userId);
   }
 
-  const systemPrompt = [
-    `You are an expert social media copywriter specialized in ${platformCtx}.`,
-    `You write engaging, authentic captions that stop the scroll, drive real interaction, and feel current.`,
-    hasImages
-      ? 'When images are provided, analyze their visual content, mood, colors, subjects, and story — let the images inspire the captions directly.'
-      : '',
-    contextBlock ? `\n## Brand Context\n${contextBlock}` : '',
-  ].filter(Boolean).join('\n');
+  // Build the system prompt entirely from AI Settings.
+  // The only hardcoded parts are: role fallback (when no persona set),
+  // image analysis instruction, and the JSON output format requirement.
+  const systemPrompt = buildSystemPrompt(settings, platformCtx, hasImages);
 
-  const jsonInstruction = `Return a JSON object with exactly this shape — no other text, no markdown, no explanation:
+  // ── JSON output instruction ───────────────────────────────────────────────
+  // Kept minimal: only structural rules the parser needs.
+  // Style, tone, hashtag count, emoji use, length — all come from AI Settings.
+  const jsonInstruction = `Respond with ONLY a valid JSON object — no markdown fences, no explanation, no text outside the JSON:
 {
-  "captions": [
-    "Caption 1 — inspirational tone",
-    "Caption 2 — conversational / relatable",
-    "Caption 3 — hook or bold opener"
-  ],
-  "hashtags": ["#hashtag1", "#hashtag2", "#hashtag3", ... up to 15 tags]
+  "captions": ["<caption 1>", "<caption 2>", "<caption 3>"],
+  "hashtags": ["#tag1", "#tag2", ...]
 }
 
-Caption rules:
-- Each caption must be complete and ready to post (no placeholders)
-- Include emojis naturally — not forced
-- Do NOT put hashtags inside the captions — they go in the hashtags array
-- Max 220 characters per caption
-- Make them feel current and on-trend for ${platformCtx}
-
-Hashtag rules:
-- Mix of niche + broad hashtags relevant to the content
-- Return as an array of strings, each starting with #
-- 10 to 15 hashtags
-- Order: specific niche tags first, broader ones last`;
+Output rules (structural only — style and tone follow your system instructions above):
+- Generate exactly 3 caption options
+- Do NOT put hashtags inside the captions — hashtags go only in the "hashtags" array
+- Each caption must be complete and ready to post as-is`;
 
   let userContent: string | Array<{ type: string; text?: string; image_url?: { url: string; detail: string } }>;
 
   if (hasImages) {
     const imageDescription = topic?.trim()
       ? `Additional context from the creator: "${topic.trim()}"`
-      : 'No additional context — infer everything from the images.';
+      : 'No additional context provided — infer everything from the images.';
 
     const contentParts: Array<{ type: string; text?: string; image_url?: { url: string; detail: string } }> = [
       {
         type: 'text',
-        text: `Analyze the attached image(s) and generate 3 social media captions for ${platformCtx}.\n\n${imageDescription}\n\n${jsonInstruction}`,
+        text: `Generate 3 social media captions for ${platformCtx} based on the attached image(s).\n\n${imageDescription}\n\n${jsonInstruction}`,
       },
       ...safeUrls.slice(0, 4).map(url => ({
         type:      'image_url',
@@ -301,7 +463,7 @@ Hashtag rules:
     ];
     userContent = contentParts;
   } else {
-    userContent = `Generate content for a post about: "${topic ?? ''}"\n\n${jsonInstruction}`;
+    userContent = `Generate 3 social media captions for ${platformCtx} about: "${topic ?? ''}"\n\n${jsonInstruction}`;
   }
 
   // Use gpt-4o for vision (supports images); fall back to configured model for text-only
@@ -338,14 +500,15 @@ Hashtag rules:
 
   if (!content) throw appError('AI_ERROR', 'Empty response from OpenAI', 502);
 
-  const cleaned = content
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '')
-    .trim();
+  const gcJsonStart = content.indexOf('{');
+  const gcJsonEnd   = content.lastIndexOf('}');
+  const gcCleaned   = gcJsonStart !== -1 && gcJsonEnd > gcJsonStart
+    ? content.slice(gcJsonStart, gcJsonEnd + 1)
+    : content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(cleaned);
+    parsed = JSON.parse(gcCleaned);
   } catch {
     throw appError('AI_ERROR', 'Could not parse AI response as JSON', 502);
   }
@@ -360,7 +523,7 @@ Hashtag rules:
 
   const result = parsed as { captions: string[]; hashtags: string[] };
   return {
-    captions: result.captions.slice(0, 3),
-    hashtags: result.hashtags.slice(0, 15),
+    captions: result.captions.slice(0, 3),   // always 3 — structural requirement
+    hashtags: result.hashtags.slice(0, 30),  // generous cap (30) — lets hashtag_strategy drive count
   };
 }

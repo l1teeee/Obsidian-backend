@@ -1,3 +1,4 @@
+import { randomUUID }   from 'crypto';
 import Fastify, { FastifyError } from 'fastify';
 import cors        from '@fastify/cors';
 import helmet      from '@fastify/helmet';
@@ -7,6 +8,8 @@ import jwtPlugin   from '@fastify/jwt';
 import { env }  from './config/env';
 import { pool } from './config/db';
 import authenticatePlugin from './plugins/jwt.plugin';
+import sanitizePlugin     from './plugins/sanitize.plugin';
+import auditPlugin        from './plugins/audit.plugin';
 import authRoutes         from './modules/auth/auth.routes';
 import postsRoutes        from './modules/posts/posts.routes';
 import workspacesRoutes   from './modules/workspaces/workspaces.routes';
@@ -22,37 +25,69 @@ interface AppError extends FastifyError {
 }
 
 export function buildApp() {
-  const fastify = Fastify({ logger: true });
+  const fastify = Fastify({
+    logger:     true,
+    // Unique request ID (UUID v4) on every request — echoed back as X-Request-ID.
+    genReqId:   () => randomUUID(),
+    // Explicit body size limit: 5 MB. Media uploads use multipart (separate limit).
+    bodyLimit:  5 * 1024 * 1024,
+  });
 
-  // ── Security headers ────────────────────────────────────────────────────────
+  // ── X-Request-ID response header ─────────────────────────────────────────
+  fastify.addHook('onRequest', async (request, reply) => {
+    reply.header('X-Request-ID', request.id);
+  });
+
+  // ── Cache-Control: no-store on all API responses ──────────────────────────
+  // API responses must never be cached by browsers or intermediate proxies.
+  fastify.addHook('onSend', async (_request, reply) => {
+    if (!reply.hasHeader('Cache-Control')) {
+      reply.header('Cache-Control', 'no-store');
+    }
+  });
+
+  // ── Security headers ──────────────────────────────────────────────────────
   fastify.register(helmet, {
     contentSecurityPolicy:      false,   // REST API — no HTML
     crossOriginEmbedderPolicy:  false,
     crossOriginResourcePolicy:  { policy: 'cross-origin' },
   });
 
-  // ── CORS ────────────────────────────────────────────────────────────────────
+  // ── CORS ──────────────────────────────────────────────────────────────────
   fastify.register(cors, {
     origin:      env.CORS_ORIGINS.split(',').map(o => o.trim()),
     credentials: true,
     methods:     ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
-  // ── Rate limiting (global=false → only applied per-route when configured) ──
+  // ── Rate limiting (global=false → only applied per-route when configured) ─
   fastify.register(rateLimit, {
-    global:    false,
+    global:       false,
     keyGenerator: (req) => req.ip,
   });
 
-  // ── Cookies (httpOnly refresh token) ────────────────────────────────────────
+  // ── Cookies (httpOnly refresh token) ──────────────────────────────────────
   fastify.register(cookie, { secret: env.COOKIE_SECRET });
 
-  // ── JWT ─────────────────────────────────────────────────────────────────────
+  // ── JWT ───────────────────────────────────────────────────────────────────
   fastify.register(jwtPlugin, { secret: env.JWT_SECRET });
-
   fastify.register(authenticatePlugin);
 
-  // ── Global error handler ─────────────────────────────────────────────────────
+  // ── Input sanitization ────────────────────────────────────────────────────
+  // Runs preValidation on every request:
+  // • Blocks null bytes and path traversal sequences (400)
+  // • Strips non-printable control characters
+  // • Prevents prototype pollution (__proto__, constructor, prototype keys)
+  // • Enforces max string length per value (10 KB)
+  // • Enforces max object nesting depth (12 levels)
+  fastify.register(sanitizePlugin);
+
+  // ── Audit logging ─────────────────────────────────────────────────────────
+  // Structured log entry per response: requestId, method, route, statusCode,
+  // durationMs, ip, userId (if authenticated), ua. Auth events always logged.
+  fastify.register(auditPlugin);
+
+  // ── Global error handler ──────────────────────────────────────────────────
   fastify.setErrorHandler((error: AppError, _request, reply) => {
     const statusCode = error.statusCode ?? 500;
     const code = error.errorCode ?? (statusCode < 500 ? 'VALIDATION_ERROR' : 'INTERNAL_ERROR');
@@ -70,7 +105,7 @@ export function buildApp() {
     });
   });
 
-  // ── Health check ────────────────────────────────────────────────────────────
+  // ── Health check ──────────────────────────────────────────────────────────
   fastify.get('/health', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (_req, reply) => {
@@ -82,7 +117,7 @@ export function buildApp() {
     }
   });
 
-  // ── Routes ──────────────────────────────────────────────────────────────────
+  // ── Routes ────────────────────────────────────────────────────────────────
   fastify.register(authRoutes,       { prefix: '/auth' });
   fastify.register(postsRoutes,      { prefix: '/posts' });
   fastify.register(workspacesRoutes, { prefix: '/workspaces' });

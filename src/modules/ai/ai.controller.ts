@@ -1,5 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { generateCaptionSuggestions, generateImage, suggestScheduleTime } from './ai.service';
+import { generateCaptionSuggestions, generateImage, editImage, suggestScheduleTime, analyzeImageForPost } from './ai.service';
 
 interface GenerateImageBody {
   prompt: string;
@@ -52,5 +52,41 @@ export async function suggestTimeHandler(
 ): Promise<void> {
   const { caption = '', platforms, currentHour, weekday } = request.body;
   const result = await suggestScheduleTime({ caption, platforms, currentHour, weekday });
+  reply.code(200).send({ success: true, data: result });
+}
+
+interface EditImageBody {
+  imageDataUrl: string;
+  maskDataUrl:  string;
+  instruction:  string;
+}
+
+export async function editImageHandler(
+  request: FastifyRequest<{ Body: EditImageBody }>,
+  reply:   FastifyReply,
+): Promise<void> {
+  const { imageDataUrl, maskDataUrl, instruction } = request.body;
+  const result = await editImage({ imageDataUrl, maskDataUrl, instruction });
+  reply.code(200).send({ success: true, data: result });
+}
+
+interface AnalyzeImageBody {
+  imageUrls:    string[];
+  platforms:    string[];
+  workspaceId?: string;
+  currentHour?: number;
+  weekday?:     string;
+}
+
+export async function analyzeImageHandler(
+  request: FastifyRequest<{ Body: AnalyzeImageBody }>,
+  reply:   FastifyReply,
+): Promise<void> {
+  const { imageUrls, platforms, workspaceId, currentHour, weekday } = request.body;
+  const result = await analyzeImageForPost({
+    imageUrls, platforms, workspaceId,
+    userId: request.user.id,
+    currentHour, weekday,
+  });
   reply.code(200).send({ success: true, data: result });
 }

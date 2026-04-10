@@ -1,3 +1,16 @@
+export const editImageSchema = {
+  body: {
+    type: 'object',
+    required: ['imageDataUrl', 'maskDataUrl', 'instruction'],
+    properties: {
+      imageDataUrl: { type: 'string', maxLength: 5_000_000 },  // base64 PNG ~1-3 MB
+      maskDataUrl:  { type: 'string', maxLength: 500_000    },  // transparent PNG, tiny
+      instruction:  { type: 'string', minLength: 3, maxLength: 1000 },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
 export const generateImageSchema = {
   body: {
     type: 'object',
@@ -31,6 +44,30 @@ export const inspireSchema = {
         items:    { type: 'string', maxLength: 5_000_000 },  // supports data: base64
         maxItems: 4,
       },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
+export const analyzeImageSchema = {
+  body: {
+    type: 'object',
+    required: ['imageUrls', 'platforms'],
+    properties: {
+      imageUrls: {
+        type:     'array',
+        items:    { type: 'string', maxLength: 5_000_000 },  // base64 data: or HTTPS URL
+        minItems: 1,
+        maxItems: 4,
+      },
+      platforms: {
+        type:     'array',
+        items:    { type: 'string', enum: ['meta', 'linkedin', 'youtube'] },
+        minItems: 1,
+      },
+      workspaceId: { type: 'string' },
+      currentHour: { type: 'integer', minimum: 0, maximum: 23 },
+      weekday:     { type: 'string', maxLength: 20 },
     },
     additionalProperties: false,
   },
