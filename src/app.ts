@@ -46,6 +46,22 @@ export function buildApp() {
     }
   });
 
+  // ── Content-Type enforcement ───────────────────────────────────────────────
+  // POST / PUT / PATCH must be application/json unless it's a multipart upload.
+  // Belt-and-suspenders on top of Fastify's built-in parser rejection — ensures
+  // a consistent 415 response shape for routes without a body schema.
+  fastify.addHook('preValidation', async (request, reply) => {
+    if (!['POST', 'PUT', 'PATCH'].includes(request.method)) return;
+    const ct = (request.headers['content-type'] ?? '').toLowerCase();
+    if (!ct) return; // no body — let Fastify handle
+    if (ct.startsWith('application/json')) return;
+    if (ct.startsWith('multipart/form-data')) return; // /media/upload
+    reply.code(415).send({
+      success: false,
+      error: { code: 'UNSUPPORTED_MEDIA_TYPE', message: 'Content-Type must be application/json' },
+    });
+  });
+
   // ── Security headers ──────────────────────────────────────────────────────
   fastify.register(helmet, {
     contentSecurityPolicy:      false,   // REST API — no HTML

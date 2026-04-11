@@ -1,6 +1,7 @@
 import { RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
 import { cache, TTL } from '../../lib/cache';
+import { decryptToken } from '../../lib/crypto';
 import type {
   FacebookConnectionRow,
   FbInsightItem,
@@ -104,7 +105,8 @@ async function getFacebookConnection(userId: string): Promise<FacebookConnection
     );
   }
 
-  return rows[0];
+  const row = rows[0];
+  return { ...row, access_token: decryptToken(row.access_token) };
 }
 
 // ─── Public service functions ─────────────────────────────────────────────────

@@ -3,6 +3,7 @@ import { pool } from '../../config/db';
 import { uid } from '../../lib/uid';
 import { env } from '../../config/env';
 import { cache } from '../../lib/cache';
+import { encryptToken, decryptToken } from '../../lib/crypto';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -172,7 +173,7 @@ export async function linkInstagramFromExistingPages(userId: string): Promise<nu
     await dbConn.beginTransaction();
 
     for (const fbConn of rows) {
-      const pageToken = fbConn.access_token;
+      const pageToken = decryptToken(fbConn.access_token);
 
       // Resolve IG account ID using all available strategies
       const igAccountId = await resolveIgAccountId(
@@ -223,7 +224,7 @@ export async function linkInstagramFromExistingPages(userId: string): Promise<nu
            updated_at       = CURRENT_TIMESTAMP`,
         [
           igId, userId, igAccountId, igName, igPicture,
-          pageToken, null,
+          encryptToken(pageToken), null,
           fbConn.page_id, fbConn.page_name, igAccountId, accountType,
           'instagram_basic,instagram_content_publish',
         ],
@@ -334,7 +335,7 @@ export async function handleInstagramDirectCallback(userId: string, code: string
       me.id,
       me.username ?? me.name ?? 'Instagram',
       me.profile_picture_url ?? null,
-      longToken,
+      encryptToken(longToken),
       expiresAt,
       me.id,
       me.account_type ?? null,
@@ -448,7 +449,7 @@ export async function handleFacebookCallback(userId: string, code: string, grant
            SET is_active = 1, access_token = ?, user_access_token = ?, token_expires_at = ?,
                account_name = ?, account_picture = ?, updated_at = NOW()
            WHERE id = ?`,
-          [pageToken, userToken, pageExpiry, me.name, me.picture?.data?.url ?? null, existing[0].id],
+          [encryptToken(pageToken), encryptToken(userToken), pageExpiry, me.name, me.picture?.data?.url ?? null, existing[0].id],
         );
       } else {
         // Truly no pages — save personal FB profile as fallback
@@ -466,7 +467,7 @@ export async function handleFacebookCallback(userId: string, code: string, grant
              is_active        = 1,
              scopes           = VALUES(scopes),
              updated_at       = CURRENT_TIMESTAMP`,
-          [fbId, userId, me.id, me.name, me.picture?.data?.url ?? null, userToken, expiresAt, 'public_profile,email'],
+          [fbId, userId, me.id, me.name, me.picture?.data?.url ?? null, encryptToken(userToken), expiresAt, 'public_profile,email'],
         );
       }
     }
@@ -497,7 +498,7 @@ export async function handleFacebookCallback(userId: string, code: string, grant
            updated_at         = CURRENT_TIMESTAMP`,
         [
           fbId, userId, me.id, me.name, me.picture?.data?.url ?? null,
-          page.access_token, userToken, null,
+          encryptToken(page.access_token), encryptToken(userToken), null,
           page.id, page.name, igAccountId,
           actualScopes,
         ],
@@ -542,7 +543,7 @@ export async function handleFacebookCallback(userId: string, code: string, grant
              updated_at       = CURRENT_TIMESTAMP`,
           [
             igId, userId, igAccountId, igName, igPicture,
-            page.access_token, null,
+            encryptToken(page.access_token), null,
             page.id, page.name, igAccountId, igAccType,
             'instagram_basic,instagram_content_publish',
           ],
@@ -585,7 +586,7 @@ export async function handleFacebookCallback(userId: string, code: string, grant
             igAcct.id,
             igAcct.username ?? igAcct.name ?? 'Instagram',
             igAcct.profile_picture_url ?? null,
-            userToken,
+            encryptToken(userToken),
             expiresAt,
             igAcct.id,
             'instagram_basic,instagram_content_publish',

@@ -41,6 +41,13 @@ const auditPlugin: FastifyPluginAsync = async (fastify) => {
     const isError     = reply.statusCode >= 400;
     const isServerErr = reply.statusCode >= 500;
 
+    // For failed auth requests, include the attempted email (never the password).
+    // Useful for detecting credential stuffing. Only populated when body was parsed.
+    const attemptedEmail =
+      isAuthRoute && isError
+        ? (((request.body as Record<string, unknown> | null) ?? {})['email'] as string | undefined) ?? null
+        : null;
+
     const entry = {
       requestId:  request.id,
       method:     request.method,
@@ -52,6 +59,7 @@ const auditPlugin: FastifyPluginAsync = async (fastify) => {
       // Truncate user-agent to avoid log bloat and injection.
       ua: (request.headers['user-agent'] ?? '').slice(0, 200) || null,
       ...(isAuthRoute && { event: 'auth' }),
+      ...(attemptedEmail && { attemptedEmail }),
     };
 
     if (isServerErr) {

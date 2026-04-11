@@ -1,5 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { storeFile } from './media.service';
+import { storeFile, getPresignedUploadUrl } from './media.service';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024;  // 100 MB
 
@@ -39,17 +39,22 @@ function detectMime(buf: Buffer): string | null {
   return null;
 }
 
+// ─── POST /media/upload ───────────────────────────────────────────────────────
+// Existing server-side upload — backend receives the file and stores it in S3.
+// Best for images (< 20 MB). For large videos, prefer POST /media/presign.
+
 export async function uploadHandler(
   request: FastifyRequest,
   reply:   FastifyReply,
 ): Promise<void> {
+  const { id: userId } = request.user as { id: string };
+
   const file = await request.file({ limits: { fileSize: MAX_FILE_SIZE } });
 
   if (!file) {
     throw appError('NO_FILE', 'No file provided.', 400);
   }
 
-  // Read into buffer first — enforces the size limit set above
   let buffer: Buffer;
   try {
     buffer = await file.toBuffer();
@@ -67,7 +72,42 @@ export async function uploadHandler(
     throw appError('INVALID_TYPE', 'Only image and video files are allowed.', 415);
   }
 
-  const result = await storeFile(buffer, file.filename, actualMime);
+  const result = await storeFile(buffer, file.filename, actualMime, userId);
+
+  reply.code(200).send({ success: true, data: result });
+}
+
+// ─── POST /media/presign ──────────────────────────────────────────────────────
+// Returns a pre-signed S3 PUT URL so the browser uploads DIRECTLY to S3.
+// Best for videos. The file never passes through the backend server.
+//
+// Request body: { mimeType: string }
+// Response:     { presignedUrl, key, expiresIn }
+//
+// After the client uploads, the key is stored in the draft/post.
+// On publish, call promoteToPost() to move it from temp/ to posts/.
+
+interface PresignBody {
+  mimeType: string;
+}
+
+const ALLOWED_MIME_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp',
+  'video/mp4', 'video/quicktime', 'video/webm', 'video/avi',
+]);
+
+export async function presignHandler(
+  request: FastifyRequest,
+  reply:   FastifyReply,
+): Promise<void> {
+  const { id: userId } = request.user as { id: string };
+  const { mimeType }   = request.body as PresignBody;
+
+  if (!mimeType || !ALLOWED_MIME_TYPES.has(mimeType)) {
+    throw appError('INVALID_TYPE', 'Unsupported file type.', 400);
+  }
+
+  const result = await getPresignedUploadUrl(userId, mimeType);
 
   reply.code(200).send({ success: true, data: result });
 }
