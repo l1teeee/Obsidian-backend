@@ -17,6 +17,7 @@ interface UserRow extends RowDataPacket {
   email_verification_token:   string | null;
   max_sessions:               number;
   sessions_invalidated_at:    Date | null;
+  is_active:                  number;
 }
 
 interface RefreshTokenRow extends RowDataPacket {
@@ -25,6 +26,7 @@ interface RefreshTokenRow extends RowDataPacket {
   token:       string;
   device_info: string | null;
   created_at:  Date;
+  is_active:   number;
 }
 
 export interface ActiveSession {
@@ -72,7 +74,7 @@ function signTokens(userId: string, email: string, profileCompleted: boolean): O
 async function storeRefreshToken(userId: string, token: string, deviceInfo?: string): Promise<void> {
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await pool.query<ResultSetHeader>(
-    'INSERT INTO refresh_tokens (user_id, token, device_info, expires_at) VALUES (?, ?, ?, ?)',
+    'INSERT INTO refresh_tokens (user_id, token, device_info, expires_at, is_active) VALUES (?, ?, ?, ?, 1)',
     [userId, token, deviceInfo ?? null, expiresAt],
   );
 }
@@ -130,6 +132,7 @@ export async function verifyEmail(email: string, code: string): Promise<TokenPai
   const profileCompleted = Boolean(user.profile_completed);
   const tokens           = signTokens(user.id, user.email, profileCompleted);
   await storeRefreshToken(user.id, tokens.refreshToken);
+  await pool.query('UPDATE users SET is_active = 1 WHERE id = ?', [user.id]);
 
   return { ...tokens, isFirstLogin: true, profileCompleted };
 }
@@ -181,7 +184,7 @@ export async function login(
 
   // Check active session count
   const [activeSessions] = await pool.query<RefreshTokenRow[]>(
-    'SELECT id, device_info, created_at FROM refresh_tokens WHERE user_id = ? AND expires_at > NOW() ORDER BY created_at DESC',
+    'SELECT id, device_info, created_at FROM refresh_tokens WHERE user_id = ? AND expires_at > NOW() AND is_active = 1 ORDER BY created_at DESC',
     [user.id],
   );
 
@@ -198,13 +201,14 @@ export async function login(
 
   // Force: revoke all existing sessions and stamp invalidation time
   if (force) {
-    await pool.query('DELETE FROM refresh_tokens WHERE user_id = ?', [user.id]);
+    await pool.query('UPDATE refresh_tokens SET is_active = 0 WHERE user_id = ?', [user.id]);
     await pool.query('UPDATE users SET sessions_invalidated_at = NOW() WHERE id = ?', [user.id]);
   }
 
   const profileCompleted = Boolean(user.profile_completed);
   const tokens = signTokens(user.id, user.email, profileCompleted);
   await storeRefreshToken(user.id, tokens.refreshToken, deviceInfo);
+  await pool.query('UPDATE users SET is_active = 1 WHERE id = ?', [user.id]);
 
   return { ...tokens, isFirstLogin: Boolean(user.first_login), profileCompleted };
 }
@@ -224,12 +228,12 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   }
 
   const [tokenRows] = await pool.query<RefreshTokenRow[]>(
-    'SELECT id, user_id FROM refresh_tokens WHERE token = ? AND user_id = ? AND expires_at > NOW() LIMIT 1',
+    'SELECT id, user_id FROM refresh_tokens WHERE token = ? AND user_id = ? AND expires_at > NOW() AND is_active = 1 LIMIT 1',
     [refreshToken, payload.id],
   );
 
   if (tokenRows.length === 0) {
-    await pool.query('DELETE FROM refresh_tokens WHERE user_id = ?', [payload.id]);
+    await pool.query('UPDATE refresh_tokens SET is_active = 0 WHERE user_id = ?', [payload.id]);
     throw appError('INVALID_TOKEN', 'Refresh token has been revoked. Please log in again.', 401);
   }
 
@@ -244,7 +248,7 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
     throw appError('INVALID_TOKEN', 'User associated with token no longer exists', 401);
   }
 
-  await pool.query('DELETE FROM refresh_tokens WHERE token = ?', [refreshToken]);
+  await pool.query('UPDATE refresh_tokens SET is_active = 0 WHERE token = ?', [refreshToken]);
 
   const profileCompleted = Boolean(user.profile_completed);
   const tokens = signTokens(user.id, user.email, profileCompleted);
@@ -254,13 +258,13 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
 }
 
 export async function logout(userId: string): Promise<void> {
-  await pool.query('DELETE FROM refresh_tokens WHERE user_id = ?', [userId]);
-  await pool.query('UPDATE users SET sessions_invalidated_at = NOW() WHERE id = ?', [userId]);
+  await pool.query('UPDATE refresh_tokens SET is_active = 0 WHERE user_id = ?', [userId]);
+  await pool.query('UPDATE users SET is_active = 0, sessions_invalidated_at = NOW() WHERE id = ?', [userId]);
 }
 
 export async function getSessions(userId: string): Promise<ActiveSession[]> {
   const [rows] = await pool.query<RefreshTokenRow[]>(
-    'SELECT id, device_info, created_at FROM refresh_tokens WHERE user_id = ? AND expires_at > NOW() ORDER BY created_at DESC',
+    'SELECT id, device_info, created_at FROM refresh_tokens WHERE user_id = ? AND expires_at > NOW() AND is_active = 1 ORDER BY created_at DESC',
     [userId],
   );
   return rows.map(r => ({
@@ -271,6 +275,6 @@ export async function getSessions(userId: string): Promise<ActiveSession[]> {
 }
 
 export async function forceLogoutAll(userId: string): Promise<void> {
-  await pool.query('DELETE FROM refresh_tokens WHERE user_id = ?', [userId]);
-  await pool.query('UPDATE users SET sessions_invalidated_at = NOW() WHERE id = ?', [userId]);
+  await pool.query('UPDATE refresh_tokens SET is_active = 0 WHERE user_id = ?', [userId]);
+  await pool.query('UPDATE users SET is_active = 0, sessions_invalidated_at = NOW() WHERE id = ?', [userId]);
 }
