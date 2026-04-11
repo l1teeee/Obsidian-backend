@@ -14,11 +14,13 @@ const completeProfileSchema = {
   },
 };
 
+const USERS_LIMIT = { max: 60, timeWindow: '1 minute' };
+
 const usersRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
 
-  fastify.get('/me',  getMeHandler);
-  fastify.put('/me', { schema: completeProfileSchema }, completeProfileHandler);
+  fastify.get('/me',  { config: { rateLimit: USERS_LIMIT } }, getMeHandler);
+  fastify.put('/me',  { schema: completeProfileSchema, config: { rateLimit: USERS_LIMIT } }, completeProfileHandler);
 };
 
 export default usersRoutes;

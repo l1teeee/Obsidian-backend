@@ -33,25 +33,25 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post(
     '/logout',
-    { preHandler: [fastify.authenticate] },
+    { preHandler: [fastify.authenticate], config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     controller.logoutHandler,
   );
 
   fastify.get(
     '/ping',
-    { preHandler: [fastify.authenticate] },
+    { preHandler: [fastify.authenticate], config: { rateLimit: { max: 120, timeWindow: '1 minute' } } },
     controller.pingHandler,
   );
 
   fastify.get(
     '/sessions',
-    { preHandler: [fastify.authenticate] },
+    { preHandler: [fastify.authenticate], config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     controller.getSessionsHandler,
   );
 
   fastify.post(
     '/force-logout',
-    { preHandler: [fastify.authenticate] },
+    { preHandler: [fastify.authenticate], config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
     controller.forceLogoutHandler,
   );
 };

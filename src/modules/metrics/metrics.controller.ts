@@ -1,6 +1,18 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import * as metricsService from './metrics.service';
 
+// ─── GET /dashboard/summary ───────────────────────────────────────────────────
+
+export async function getDashboardSummary(req: FastifyRequest, reply: FastifyReply) {
+  const userId = (req.user as { id: string }).id;
+  try {
+    const data = await metricsService.getDashboardSummary(userId);
+    reply.send({ success: true, data });
+  } catch {
+    reply.code(500).send({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to load dashboard summary' } });
+  }
+}
+
 // ─── GET /metrics/facebook/posts/:postId ─────────────────────────────────────
 
 export async function getFacebookPostById(

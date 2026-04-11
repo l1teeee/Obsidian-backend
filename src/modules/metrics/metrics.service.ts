@@ -1,4 +1,6 @@
+import { RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
+import { cache, TTL } from '../../lib/cache';
 import type {
   FacebookConnectionRow,
   FbInsightItem,
@@ -108,6 +110,10 @@ async function getFacebookConnection(userId: string): Promise<FacebookConnection
 // ─── Public service functions ─────────────────────────────────────────────────
 
 export async function getFacebookSummary(userId: string): Promise<FacebookSummary> {
+  const key = `fb:summary:${userId}`;
+  const hit = cache.get<FacebookSummary>(key);
+  if (hit) return hit;
+
   const { page_id, access_token } = await getFacebookConnection(userId);
 
   const until     = new Date();
@@ -126,16 +132,22 @@ export async function getFacebookSummary(userId: string): Promise<FacebookSummar
     }),
   ]);
 
-  return {
+  const result: FacebookSummary = {
     fan_count:         pageFields.fan_count ?? 0,
     impressions_30d:   sumMetric(insights.data, 'page_posts_impressions'),
     reach_30d:         sumMetric(insights.data, 'page_posts_impressions_unique'),
     engaged_users_30d: sumMetric(insights.data, 'page_post_engagements'),
     period: { since: toDateStr(since), until: toDateStr(until) },
   };
+  cache.set(key, result, TTL.THIRTY_MIN);
+  return result;
 }
 
 export async function getFacebookPosts(userId: string): Promise<PostMetrics[]> {
+  const key = `fb:posts:${userId}`;
+  const hit = cache.get<PostMetrics[]>(key);
+  if (hit) return hit;
+
   const { page_id, access_token } = await getFacebookConnection(userId);
 
   // Fetch from Facebook and get the user's active local posts in parallel
@@ -159,13 +171,79 @@ export async function getFacebookPosts(userId: string): Promise<PostMetrics[]> {
   const idMap    = new Map(localRows.map(r => [r.platform_post_id, r.id]));
   const filtered = fbRes.data.filter(p => idMap.has(p.id));
 
-  return filtered.map(p => ({ ...mapPost(p), local_id: idMap.get(p.id) }));
+  const result = filtered.map(p => ({ ...mapPost(p), local_id: idMap.get(p.id) }));
+  cache.set(key, result, TTL.FIFTEEN_MIN);
+  return result;
 }
 
 export async function getFacebookPostById(userId: string, postId: string): Promise<PostMetrics> {
   const { access_token } = await getFacebookConnection(userId);
   const post = await fbGet<FbPost>(`/${postId}`, access_token, { fields: POST_FIELDS });
   return mapPost(post);
+}
+
+// ─── getDashboardSummary ──────────────────────────────────────────────────────
+
+export interface DashboardSummary {
+  posts: {
+    total:                number;
+    published:            number;
+    scheduled:            number;
+    draft:                number;
+    published_this_week:  number;
+  };
+  platforms_connected: number;
+}
+
+interface PostCountRow extends RowDataPacket {
+  total:                number;
+  published:            number;
+  scheduled:            number;
+  draft:                number;
+  published_this_week:  number;
+}
+
+interface CountRow extends RowDataPacket {
+  count: number;
+}
+
+export async function getDashboardSummary(userId: string): Promise<DashboardSummary> {
+  const key = `dashboard:summary:${userId}`;
+  const hit = cache.get<DashboardSummary>(key);
+  if (hit) return hit;
+
+  const [[postCounts], [platformRow]] = await Promise.all([
+    pool.query<PostCountRow[]>(
+      `SELECT
+         COUNT(*)                                                               AS total,
+         SUM(status = 'published')                                              AS published,
+         SUM(status = 'scheduled')                                              AS scheduled,
+         SUM(status = 'draft')                                                  AS draft,
+         SUM(status = 'published' AND created_at >= NOW() - INTERVAL 7 DAY)    AS published_this_week
+       FROM posts
+       WHERE user_id = ? AND status != 'deleted'`,
+      [userId],
+    ),
+    pool.query<CountRow[]>(
+      `SELECT COUNT(*) AS count FROM social_connections WHERE user_id = ? AND is_active = 1`,
+      [userId],
+    ),
+  ]);
+
+  const row = postCounts[0] ?? { total: 0, published: 0, scheduled: 0, draft: 0, published_this_week: 0 };
+
+  const result: DashboardSummary = {
+    posts: {
+      total:               Number(row.total),
+      published:           Number(row.published),
+      scheduled:           Number(row.scheduled),
+      draft:               Number(row.draft),
+      published_this_week: Number(row.published_this_week),
+    },
+    platforms_connected: Number(platformRow[0]?.count ?? 0),
+  };
+  cache.set(key, result, TTL.FIVE_MIN);
+  return result;
 }
 
 // ─── Graph API error classifier ───────────────────────────────────────────────

@@ -2,6 +2,7 @@ import { RowDataPacket, ResultSetHeader } from 'mysql2';
 import { pool } from '../../config/db';
 import { uid } from '../../lib/uid';
 import { env } from '../../config/env';
+import { cache } from '../../lib/cache';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -363,6 +364,10 @@ export async function deleteConnection(id: string, userId: string): Promise<void
     err.statusCode = 404;
     throw err;
   }
+  // Invalidate FB and dashboard caches — platform list changed
+  cache.deleteByPrefix(`fb:summary:${userId}`);
+  cache.deleteByPrefix(`fb:posts:${userId}`);
+  cache.delete(`dashboard:summary:${userId}`);
 }
 
 /**

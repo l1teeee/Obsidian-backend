@@ -99,8 +99,10 @@ export async function register(
     [id, email, passwordHash, verificationCode],
   );
 
-  // Mock email — in production this would call an email service
-  console.log(`[EMAIL MOCK] Verification code for <${email}>: ${verificationCode}`);
+  // Mock email — in production this would call an email service (e.g. Resend, SendGrid)
+  if (process.env['NODE_ENV'] !== 'production') {
+    console.log(`[EMAIL MOCK] Verification code for <${email}>: ${verificationCode}`);
+  }
 
   return {
     email,
@@ -149,7 +151,9 @@ export async function resendVerification(email: string): Promise<{ devVerifyToke
     [verificationCode, user.id],
   );
 
-  console.log(`[EMAIL MOCK] New verification code for <${email}>: ${verificationCode}`);
+  if (process.env['NODE_ENV'] !== 'production') {
+    console.log(`[EMAIL MOCK] New verification code for <${email}>: ${verificationCode}`);
+  }
 
   return process.env['NODE_ENV'] !== 'production' ? { devVerifyToken: verificationCode } : {};
 }
