@@ -168,7 +168,7 @@ export async function login(
   force = false,
 ): Promise<TokenPair | SessionConflict> {
   const [rows] = await pool.query<UserRow[]>(
-    'SELECT id, email, password_hash, first_login, profile_completed, email_verified, max_sessions FROM users WHERE email = ? LIMIT 1',
+    'SELECT id, email, password_hash, first_login, profile_completed, email_verified, max_sessions, is_active FROM users WHERE email = ? LIMIT 1',
     [email],
   );
 
@@ -179,6 +179,15 @@ export async function login(
   const passwordMatch = await bcrypt.compare(password, user.password_hash);
   if (!passwordMatch) throw appError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
   if (!user.email_verified) throw appError('EMAIL_NOT_VERIFIED', 'Please verify your email address before signing in', 403);
+
+  // Si is_active = 0 el usuario ya cerró sesión — dejar pasar sin conflicto
+  if (!user.is_active && !force) {
+    const profileCompleted = Boolean(user.profile_completed);
+    const tokens = signTokens(user.id, user.email, profileCompleted);
+    await storeRefreshToken(user.id, tokens.refreshToken, deviceInfo);
+    await pool.query('UPDATE users SET is_active = 1 WHERE id = ?', [user.id]);
+    return { ...tokens, isFirstLogin: Boolean(user.first_login), profileCompleted };
+  }
 
   const maxSessions = user.max_sessions ?? 1;
 
