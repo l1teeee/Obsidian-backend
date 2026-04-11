@@ -255,6 +255,7 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
 
 export async function logout(userId: string): Promise<void> {
   await pool.query('DELETE FROM refresh_tokens WHERE user_id = ?', [userId]);
+  await pool.query('UPDATE users SET sessions_invalidated_at = NOW() WHERE id = ?', [userId]);
 }
 
 export async function getSessions(userId: string): Promise<ActiveSession[]> {
@@ -271,4 +272,5 @@ export async function getSessions(userId: string): Promise<ActiveSession[]> {
 
 export async function forceLogoutAll(userId: string): Promise<void> {
   await pool.query('DELETE FROM refresh_tokens WHERE user_id = ?', [userId]);
+  await pool.query('UPDATE users SET sessions_invalidated_at = NOW() WHERE id = ?', [userId]);
 }
