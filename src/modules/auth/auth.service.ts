@@ -271,6 +271,26 @@ export async function logout(userId: string): Promise<void> {
   await pool.query('UPDATE users SET is_active = 0, sessions_invalidated_at = NOW() WHERE id = ?', [userId]);
 }
 
+export async function logoutByRefreshToken(refreshToken: string): Promise<void> {
+  // Decode without verifying expiry — we just need the userId to close the session
+  let userId: string | undefined;
+  try {
+    const payload = jwt.decode(refreshToken) as { id?: string } | null;
+    userId = payload?.id;
+  } catch {
+    console.log('[logoutByRefreshToken] malformed token');
+    return;
+  }
+  if (!userId) {
+    console.log('[logoutByRefreshToken] no userId in token payload');
+    return;
+  }
+  console.log('[logoutByRefreshToken] closing session for userId:', userId);
+  await pool.query('UPDATE refresh_tokens SET is_active = 0 WHERE user_id = ?', [userId]);
+  await pool.query('UPDATE users SET is_active = 0, sessions_invalidated_at = NOW() WHERE id = ?', [userId]);
+  console.log('[logoutByRefreshToken] done');
+}
+
 export async function getSessions(userId: string): Promise<ActiveSession[]> {
   const [rows] = await pool.query<RefreshTokenRow[]>(
     'SELECT id, device_info, created_at FROM refresh_tokens WHERE user_id = ? AND expires_at > NOW() AND is_active = 1 ORDER BY created_at DESC',

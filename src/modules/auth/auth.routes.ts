@@ -33,7 +33,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post(
     '/logout',
-    { preHandler: [fastify.authenticate], config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     controller.logoutHandler,
   );
 
