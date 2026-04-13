@@ -505,9 +505,10 @@ export async function createPost(userId: string, data: CreatePostData): Promise<
     ]
   );
 
-  // When publishing, promote any temp/ S3 objects to permanent posts/ path
+  // Always promote temp/ S3 objects on first save (draft, scheduled, or published).
+  // This prevents temp/ URLs from expiring before the post is ever published.
   let finalMediaUrls = data.media_urls ?? [];
-  if (status === 'published' && finalMediaUrls.length) {
+  if (finalMediaUrls.length) {
     finalMediaUrls = await promoteMediaUrls(finalMediaUrls, id, userId);
     await pool.query(
       'UPDATE posts SET media_urls = ? WHERE id = ?',
