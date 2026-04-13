@@ -3,7 +3,7 @@ import { pool }           from '../../config/db';
 import { uid }            from '../../lib/uid';
 import { decryptToken }   from '../../lib/crypto';
 import { S3_PUBLIC_URL }  from '../../lib/s3';
-import { promoteToPost }  from '../media/media.service';
+import { promoteToPost, deleteS3Objects } from '../media/media.service';
 
 // ─── Facebook publishing ──────────────────────────────────────────────────────
 
@@ -550,13 +550,17 @@ export async function updatePost(id: string, userId: string, data: UpdatePostDat
   if (data.published_at !== undefined) { fields.push('published_at = ?'); values.push(data.published_at); }
   if (data.status       !== undefined) { fields.push('status = ?');       values.push(data.status);       }
 
-  if (fields.length === 0) return getById(id, userId);
+  // Fetch current post — validates ownership and provides old media_urls for cleanup
+  const current = await getById(id, userId);
 
-  const [check] = await pool.query<PostRow[]>(
-    'SELECT id FROM posts WHERE id = ? AND user_id = ? LIMIT 1',
-    [id, userId]
-  );
-  if (check.length === 0) throw appError('NOT_FOUND', 'Post not found', 404);
+  if (fields.length === 0) return current;
+
+  // Delete S3 files that are being removed from the post
+  if (data.media_urls !== undefined) {
+    const incomingSet = new Set(data.media_urls);
+    const orphaned    = (current.media_urls ?? []).filter(url => !incomingSet.has(url));
+    if (orphaned.length) await deleteS3Objects(orphaned);
+  }
 
   values.push(id, userId);
   await pool.query(
@@ -642,6 +646,11 @@ export async function deletePost(id: string, userId: string, removeFromPlatform 
     "UPDATE posts SET status = 'deleted' WHERE id = ? AND user_id = ?",
     [id, userId],
   );
+
+  // Clean up all S3 files associated with this post
+  if (post.media_urls?.length) {
+    await deleteS3Objects(post.media_urls);
+  }
 
   return fbDeleteFailed ? { fbDeleteFailed: true } : {};
 }

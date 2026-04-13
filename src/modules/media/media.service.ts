@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { PutObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, CopyObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { s3, S3_BUCKET, S3_PUBLIC_URL } from '../../lib/s3';
 
@@ -38,18 +38,15 @@ function getExt(mimeType: string): string {
   return EXT_MAP[mimeType] ?? 'bin';
 }
 
-function yearMonth(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
 // ─── Storage functions ────────────────────────────────────────────────────────
 
 /**
  * Server-side upload: backend receives the file buffer and uploads it to S3.
- * Used for images via POST /media/upload.
+ * Used for images via POST /media/upload and AI-generated images.
  *
- * Bucket key: media/{userId}/{year-month}/{uuid}.{ext}
+ * Bucket key: temp/{userId}/{uuid}.{ext}
+ * Using temp/ ensures the lifecycle rule (7 days) cleans up files from abandoned
+ * composers automatically. promoteMediaUrls() moves them to posts/ on first save.
  */
 export async function storeFile(
   buffer:   Buffer,
@@ -57,10 +54,10 @@ export async function storeFile(
   mimeType: string,
   userId:   string,
 ): Promise<UploadResult> {
-  const id  = randomUUID();
-  const ext = getExt(mimeType);
+  const id   = randomUUID();
+  const ext  = getExt(mimeType);
   const safe = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const key  = `media/${userId}/${yearMonth()}/${id}.${ext}`;
+  const key  = `temp/${userId}/${id}.${ext}`;
 
   await s3.send(new PutObjectCommand({
     Bucket:             S3_BUCKET,
@@ -113,6 +110,23 @@ export async function getPresignedUploadUrl(
   );
 
   return { presignedUrl, key, publicUrl: `${S3_PUBLIC_URL}/${key}`, expiresIn: EXPIRES_IN };
+}
+
+/**
+ * Deletes S3 objects by their public URLs.
+ * Silently ignores URLs that don't belong to this bucket or that are already gone.
+ */
+export async function deleteS3Objects(urls: string[]): Promise<void> {
+  const base = S3_PUBLIC_URL.replace(/\/$/, '');
+  const keys = urls
+    .filter(url => url.startsWith(`${base}/`))
+    .map(url => url.slice(base.length + 1));
+
+  await Promise.all(
+    keys.map(key =>
+      s3.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: key })).catch(() => {}),
+    ),
+  );
 }
 
 /**
