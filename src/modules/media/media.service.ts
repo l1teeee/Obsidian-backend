@@ -16,6 +16,7 @@ export interface UploadResult {
 export interface PresignResult {
   presignedUrl: string;
   key:          string;
+  publicUrl:    string;  // public S3 URL — use this as sourceUrl after upload
   expiresIn:    number;  // seconds
 }
 
@@ -111,7 +112,7 @@ export async function getPresignedUploadUrl(
     { expiresIn: EXPIRES_IN },
   );
 
-  return { presignedUrl, key, expiresIn: EXPIRES_IN };
+  return { presignedUrl, key, publicUrl: `${S3_PUBLIC_URL}/${key}`, expiresIn: EXPIRES_IN };
 }
 
 /**

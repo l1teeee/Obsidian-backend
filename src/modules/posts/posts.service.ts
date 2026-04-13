@@ -1,6 +1,9 @@
 import { ResultSetHeader, RowDataPacket } from 'mysql2';
-import { pool } from '../../config/db';
-import { uid } from '../../lib/uid';
+import { pool }           from '../../config/db';
+import { uid }            from '../../lib/uid';
+import { decryptToken }   from '../../lib/crypto';
+import { S3_PUBLIC_URL }  from '../../lib/s3';
+import { promoteToPost }  from '../media/media.service';
 
 // ─── Facebook publishing ──────────────────────────────────────────────────────
 
@@ -24,6 +27,7 @@ async function getFbConnection(userId: string): Promise<FbConnection> {
   if (!rows[0]) throw appError('NO_FB_CONNECTION', 'No Facebook page connected. Connect a Facebook account first.', 422);
 
   const conn = rows[0];
+  conn.access_token = decryptToken(conn.access_token);
 
   // If the stored token is a User Token (has expiry), exchange it for a Page Access Token.
   // Page Tokens don't expire and have the permissions needed to post on behalf of the page.
@@ -80,8 +84,28 @@ async function buildFbPermalink(graphId: string): Promise<{ permalink: string; p
   return { permalink, platformPostId: graphId };
 }
 
+/** True when a URL points to a video file (by extension). */
+function isVideoUrl(url: string): boolean {
+  return /\.(mp4|mov|webm|avi)(\?|$)/i.test(url);
+}
+
 async function publishToFacebook(userId: string, caption: string, mediaUrls: string[]): Promise<FbPublishResult> {
   const conn = await getFbConnection(userId);
+
+  // Single video: use /videos endpoint (file_url + description)
+  if (mediaUrls.length === 1 && isVideoUrl(mediaUrls[0])) {
+    const res = await fetch(`https://graph.facebook.com/v21.0/${conn.page_id}/videos`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ file_url: mediaUrls[0], description: caption, access_token: conn.access_token }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: { message: string } };
+      throw appError('FB_PUBLISH_FAILED', body.error?.message ?? `Facebook API error ${res.status}`, 502);
+    }
+    const data = await res.json() as { id: string };
+    return buildFbPermalink(data.id);
+  }
 
   // Single image: use /photos endpoint (supports caption + url)
   if (mediaUrls.length === 1) {
@@ -143,6 +167,197 @@ async function publishToFacebook(userId: string, caption: string, mediaUrls: str
   }
   const data = await res.json() as { id: string };
   return buildFbPermalink(data.id);
+}
+
+// ─── Instagram publishing ─────────────────────────────────────────────────────
+
+interface IgConnectionRow extends RowDataPacket {
+  ig_user_id: string;
+  page_token: string;
+}
+
+async function getIgConnection(userId: string): Promise<IgConnectionRow> {
+  const [rows] = await pool.query<IgConnectionRow[]>(
+    `SELECT ig_business_id AS ig_user_id, access_token AS page_token
+     FROM social_connections
+     WHERE user_id = ? AND platform = 'facebook' AND ig_business_id IS NOT NULL AND is_active = 1
+     LIMIT 1`,
+    [userId],
+  );
+  if (!rows[0]) {
+    throw appError(
+      'NO_IG_CONNECTION',
+      'No Instagram Business account connected. Connect an Instagram Business account via Facebook first.',
+      422,
+    );
+  }
+  const conn = rows[0];
+  conn.page_token = decryptToken(conn.page_token);
+  return conn;
+}
+
+/** Poll /{creationId}?fields=status_code until FINISHED or error/timeout. */
+async function pollIgReady(creationId: string, token: string): Promise<void> {
+  for (let i = 0; i < 12; i++) {
+    await new Promise(r => setTimeout(r, 5000));
+    const res = await fetch(
+      `https://graph.facebook.com/v21.0/${creationId}?fields=status_code&access_token=${encodeURIComponent(token)}`,
+    );
+    if (res.ok) {
+      const { status_code } = await res.json() as { status_code?: string };
+      if (status_code === 'FINISHED') return;
+      if (status_code === 'ERROR') throw appError('IG_PUBLISH_FAILED', 'Instagram media processing failed', 502);
+    }
+  }
+  throw appError('IG_PUBLISH_TIMEOUT', 'Instagram media processing timed out after 60 seconds', 504);
+}
+
+async function igMediaPublish(igUserId: string, token: string, creationId: string): Promise<string> {
+  const res = await fetch(`https://graph.facebook.com/v21.0/${igUserId}/media_publish`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ creation_id: creationId, access_token: token }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: { message: string } };
+    throw appError('IG_PUBLISH_FAILED', body.error?.message ?? `Instagram publish error ${res.status}`, 502);
+  }
+  const { id } = await res.json() as { id: string };
+  return id; // IG media ID
+}
+
+async function getIgPermalink(mediaId: string, token: string): Promise<string> {
+  try {
+    const res = await fetch(
+      `https://graph.facebook.com/v21.0/${mediaId}?fields=permalink&access_token=${encodeURIComponent(token)}`,
+    );
+    if (res.ok) {
+      const data = await res.json() as { permalink?: string };
+      if (data.permalink) return data.permalink;
+    }
+  } catch { /* fallback below */ }
+  return `https://www.instagram.com/`;
+}
+
+interface IgPublishResult { permalink: string; platformPostId: string }
+
+async function publishToInstagram(
+  userId:    string,
+  caption:   string,
+  mediaUrls: string[],
+  postType:  string,
+): Promise<IgPublishResult> {
+  if (!mediaUrls.length) {
+    throw appError('IG_NO_MEDIA', 'Instagram requires at least one image or video.', 422);
+  }
+
+  const conn     = await getIgConnection(userId);
+  const igUserId = conn.ig_user_id;
+  const token    = conn.page_token;
+
+  // ── Single image ──────────────────────────────────────────────────────────
+  if (mediaUrls.length === 1 && !isVideoUrl(mediaUrls[0])) {
+    const containerRes = await fetch(`https://graph.facebook.com/v21.0/${igUserId}/media`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ image_url: mediaUrls[0], caption, access_token: token }),
+    });
+    if (!containerRes.ok) {
+      const body = await containerRes.json().catch(() => ({})) as { error?: { message: string } };
+      throw appError('IG_PUBLISH_FAILED', body.error?.message ?? `Instagram API error ${containerRes.status}`, 502);
+    }
+    const { id: creationId } = await containerRes.json() as { id: string };
+    const mediaId = await igMediaPublish(igUserId, token, creationId);
+    const permalink = await getIgPermalink(mediaId, token);
+    return { permalink, platformPostId: mediaId };
+  }
+
+  // ── Single video / reel ───────────────────────────────────────────────────
+  if (mediaUrls.length === 1 && isVideoUrl(mediaUrls[0])) {
+    const mediaType = postType === 'story' ? 'STORIES' : 'REELS';
+    const containerRes = await fetch(`https://graph.facebook.com/v21.0/${igUserId}/media`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ video_url: mediaUrls[0], media_type: mediaType, caption, access_token: token }),
+    });
+    if (!containerRes.ok) {
+      const body = await containerRes.json().catch(() => ({})) as { error?: { message: string } };
+      throw appError('IG_PUBLISH_FAILED', body.error?.message ?? `Instagram API error ${containerRes.status}`, 502);
+    }
+    const { id: creationId } = await containerRes.json() as { id: string };
+    // Videos require async processing — poll until ready
+    await pollIgReady(creationId, token);
+    const mediaId = await igMediaPublish(igUserId, token, creationId);
+    const permalink = await getIgPermalink(mediaId, token);
+    return { permalink, platformPostId: mediaId };
+  }
+
+  // ── Carousel (2–10 items, images and/or videos) ───────────────────────────
+  const itemIds = await Promise.all(
+    mediaUrls.map(async (url) => {
+      const body: Record<string, string | boolean> = { is_carousel_item: true, access_token: token };
+      if (isVideoUrl(url)) {
+        body.video_url  = url;
+        body.media_type = 'VIDEO';
+      } else {
+        body.image_url = url;
+      }
+      const res = await fetch(`https://graph.facebook.com/v21.0/${igUserId}/media`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { error?: { message: string } };
+        throw appError('IG_PUBLISH_FAILED', err.error?.message ?? `Instagram carousel item error ${res.status}`, 502);
+      }
+      const { id } = await res.json() as { id: string };
+      // Poll video carousel items until processing finishes
+      if (isVideoUrl(url)) await pollIgReady(id, token);
+      return id;
+    }),
+  );
+
+  const carouselRes = await fetch(`https://graph.facebook.com/v21.0/${igUserId}/media`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      media_type:   'CAROUSEL',
+      caption,
+      children:     itemIds.join(','),
+      access_token: token,
+    }),
+  });
+  if (!carouselRes.ok) {
+    const body = await carouselRes.json().catch(() => ({})) as { error?: { message: string } };
+    throw appError('IG_PUBLISH_FAILED', body.error?.message ?? `Instagram carousel container error ${carouselRes.status}`, 502);
+  }
+  const { id: carouselId } = await carouselRes.json() as { id: string };
+  const mediaId = await igMediaPublish(igUserId, token, carouselId);
+  const permalink = await getIgPermalink(mediaId, token);
+  return { permalink, platformPostId: mediaId };
+}
+
+// ─── S3 temp → posts promotion ───────────────────────────────────────────────
+
+/**
+ * For any URL pointing to the temp/ prefix in S3, copy it to posts/ (permanent).
+ * URLs already in media/ or posts/ are returned unchanged.
+ */
+async function promoteMediaUrls(urls: string[], postId: string, userId: string): Promise<string[]> {
+  const base       = S3_PUBLIC_URL.replace(/\/$/, '');
+  const tempPrefix = `${base}/temp/`;
+  return Promise.all(
+    urls.map(async (url) => {
+      if (!url.startsWith(tempPrefix)) return url;
+      const key = url.slice(base.length + 1); // 'temp/userId/uuid.ext'
+      try {
+        return await promoteToPost(key, postId, userId);
+      } catch {
+        return url; // keep temp URL on failure — will auto-expire in 7 days
+      }
+    }),
+  );
 }
 
 interface PostRow extends RowDataPacket {
@@ -290,9 +505,28 @@ export async function createPost(userId: string, data: CreatePostData): Promise<
     ]
   );
 
+  // When publishing, promote any temp/ S3 objects to permanent posts/ path
+  let finalMediaUrls = data.media_urls ?? [];
+  if (status === 'published' && finalMediaUrls.length) {
+    finalMediaUrls = await promoteMediaUrls(finalMediaUrls, id, userId);
+    await pool.query(
+      'UPDATE posts SET media_urls = ? WHERE id = ?',
+      [JSON.stringify(finalMediaUrls), id],
+    );
+  }
+
   // Publish immediately to Facebook if requested
   if (status === 'published' && data.platform === 'facebook') {
-    const result = await publishToFacebook(userId, data.caption ?? '', data.media_urls ?? []);
+    const result = await publishToFacebook(userId, data.caption ?? '', finalMediaUrls);
+    await pool.query(
+      `UPDATE posts SET permalink = ?, platform_post_id = ?, published_at = NOW() WHERE id = ?`,
+      [result.permalink, result.platformPostId, id],
+    );
+  }
+
+  // Publish immediately to Instagram if requested
+  if (status === 'published' && data.platform === 'instagram') {
+    const result = await publishToInstagram(userId, data.caption ?? '', finalMediaUrls, data.post_type ?? 'post');
     await pool.query(
       `UPDATE posts SET permalink = ?, platform_post_id = ?, published_at = NOW() WHERE id = ?`,
       [result.permalink, result.platformPostId, id],
@@ -329,18 +563,38 @@ export async function updatePost(id: string, userId: string, data: UpdatePostDat
     values
   );
 
-  // Publish to Facebook if the status is being set to published
+  // Publish to platform if the status is being set to published
   if (data.status === 'published') {
-    const post = await getById(id, userId);
+    const post            = await getById(id, userId);
     const effectivePlatform = data.platform ?? post.platform;
-    if (effectivePlatform === 'facebook' && !post.permalink) {
-      const mediaUrls = data.media_urls ?? (post.media_urls ?? []);
-      const caption   = data.caption   ?? post.caption ?? '';
-      const result    = await publishToFacebook(userId, caption, mediaUrls);
-      await pool.query(
-        `UPDATE posts SET permalink = ?, platform_post_id = ?, published_at = NOW() WHERE id = ?`,
-        [result.permalink, result.platformPostId, id],
-      );
+
+    if (!post.permalink) {
+      let rawMediaUrls = data.media_urls ?? (post.media_urls ?? []);
+      // Promote temp/ S3 objects to permanent posts/ path
+      if (rawMediaUrls.length) {
+        rawMediaUrls = await promoteMediaUrls(rawMediaUrls, id, userId);
+        await pool.query(
+          'UPDATE posts SET media_urls = ? WHERE id = ?',
+          [JSON.stringify(rawMediaUrls), id],
+        );
+      }
+
+      const caption = data.caption ?? post.caption ?? '';
+
+      if (effectivePlatform === 'facebook') {
+        const result = await publishToFacebook(userId, caption, rawMediaUrls);
+        await pool.query(
+          `UPDATE posts SET permalink = ?, platform_post_id = ?, published_at = NOW() WHERE id = ?`,
+          [result.permalink, result.platformPostId, id],
+        );
+      } else if (effectivePlatform === 'instagram') {
+        const postType = data.post_type ?? post.post_type;
+        const result   = await publishToInstagram(userId, caption, rawMediaUrls, postType);
+        await pool.query(
+          `UPDATE posts SET permalink = ?, platform_post_id = ?, published_at = NOW() WHERE id = ?`,
+          [result.permalink, result.platformPostId, id],
+        );
+      }
     }
   }
 
