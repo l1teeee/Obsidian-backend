@@ -73,6 +73,19 @@ export const analyzeImageSchema = {
   },
 } as const;
 
+export const carouselSlidesSchema = {
+  body: {
+    type: 'object',
+    required: ['topic', 'count'],
+    properties: {
+      topic: { type: 'string', minLength: 3, maxLength: 300 },
+      count: { type: 'integer', minimum: 2, maximum: 10 },
+      style: { type: 'string', maxLength: 300 },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
 export const suggestTimeSchema = {
   body: {
     type: 'object',

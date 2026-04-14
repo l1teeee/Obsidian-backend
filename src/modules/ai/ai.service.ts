@@ -399,6 +399,96 @@ export async function analyzeImageForPost(options: AnalyzeImageOptions): Promise
   };
 }
 
+// ── generateCarouselSlides ────────────────────────────────────────────────────
+
+export interface CarouselSlidesOptions {
+  topic:  string;
+  count:  number;   // 2-10
+  style?: string;   // visual style descriptor chosen by the user
+}
+
+export interface CarouselSlidesResult {
+  slides: string[];   // one DALL-E prompt per slide
+}
+
+export async function generateCarouselSlides(options: CarouselSlidesOptions): Promise<CarouselSlidesResult> {
+  if (!env.OPENAI_API_KEY) {
+    throw appError('AI_NOT_CONFIGURED', 'OpenAI API key not configured.', 503);
+  }
+
+  const { topic, count, style } = options;
+  const n = Math.min(Math.max(2, count), 10);
+
+  const styleInstruction = style?.trim()
+    ? `Visual style (FIXED — append this EXACT string to every prompt, word for word): "${style.trim()}"`
+    : `STEP 1 — Choose ONE visual style that fits the topic. Then append that EXACT style string to every prompt below.`;
+
+  const userPrompt = `You are an expert DALL-E prompt writer for social media carousel posts.
+
+Topic: "${topic}"
+Number of slides: ${n}
+${styleInstruction}
+
+Write exactly ${n} image prompts — one per slide:
+- Each describes ONE single scene/step only. No collages, grids, multi-panel images.
+- Every prompt MUST end with the same style string — identical across all slides.
+- Logical narrative order (first step → last step).
+- No slide numbers, labels, or text overlays.
+- IMPORTANT: Detect the language of the topic and write the scene descriptions in that same language. The style string stays in English.
+
+Return ONLY valid JSON (no markdown, no explanation):
+{
+  "slides": ["<scene>, <style>", "<scene>, <style>", ...]
+}`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model:       env.OPENAI_MODEL,
+      messages: [
+        { role: 'system', content: 'You are a DALL-E prompt expert. Return only valid JSON.' },
+        { role: 'user',   content: userPrompt },
+      ],
+      temperature: 0.7,
+      max_tokens:  1200,
+    }),
+  });
+
+  if (!res.ok) {
+    interface OpenAIError { error?: { message: string } }
+    const body = await res.json() as OpenAIError;
+    throw appError('AI_ERROR', body.error?.message ?? 'OpenAI request failed', 502);
+  }
+
+  interface OpenAIResponse {
+    choices: Array<{ message: { content: string | null } }>;
+  }
+  const data    = await res.json() as OpenAIResponse;
+  const content = data.choices[0]?.message.content?.trim();
+  if (!content) throw appError('AI_ERROR', 'Empty response from OpenAI', 502);
+
+  const start   = content.indexOf('{');
+  const end     = content.lastIndexOf('}');
+  const cleaned = start !== -1 && end > start
+    ? content.slice(start, end + 1)
+    : content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+
+  let parsed: unknown;
+  try { parsed = JSON.parse(cleaned); }
+  catch { throw appError('AI_ERROR', 'Could not parse AI response as JSON', 502); }
+
+  const r = parsed as { slides?: unknown };
+  if (!Array.isArray(r.slides) || r.slides.length === 0) {
+    throw appError('AI_ERROR', 'Unexpected AI response format', 502);
+  }
+
+  return { slides: (r.slides as string[]).slice(0, n) };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function generateCaptionSuggestions(options: InspireOptions): Promise<InspireResult> {

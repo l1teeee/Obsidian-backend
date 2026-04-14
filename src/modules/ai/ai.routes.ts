@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
-import { inspireHandler, generateImageHandler, editImageHandler, suggestTimeHandler, analyzeImageHandler } from './ai.controller';
-import { inspireSchema, generateImageSchema, editImageSchema, suggestTimeSchema, analyzeImageSchema } from './ai.schema';
+import { inspireHandler, generateImageHandler, editImageHandler, suggestTimeHandler, analyzeImageHandler, carouselSlidesHandler } from './ai.controller';
+import { inspireSchema, generateImageSchema, editImageSchema, suggestTimeSchema, analyzeImageSchema, carouselSlidesSchema } from './ai.schema';
 
 const AI_LIMIT = { max: 20, timeWindow: '1 minute' };
 
@@ -11,5 +11,6 @@ export default async function aiRoutes(fastify: FastifyInstance): Promise<void> 
   fastify.post('/generate-image', { schema: generateImageSchema, config: { rateLimit: AI_LIMIT } }, generateImageHandler);
   fastify.post('/edit-image',     { schema: editImageSchema,     config: { rateLimit: AI_LIMIT } }, editImageHandler    );
   fastify.post('/suggest-time',   { schema: suggestTimeSchema,   config: { rateLimit: AI_LIMIT } }, suggestTimeHandler  );
-  fastify.post('/analyze-image',  { schema: analyzeImageSchema,  config: { rateLimit: AI_LIMIT } }, analyzeImageHandler );
+  fastify.post('/analyze-image',     { schema: analyzeImageSchema,     config: { rateLimit: AI_LIMIT } }, analyzeImageHandler    );
+  fastify.post('/carousel-slides',   { schema: carouselSlidesSchema,   config: { rateLimit: AI_LIMIT } }, carouselSlidesHandler  );
 }

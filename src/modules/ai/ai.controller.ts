@@ -1,5 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { generateCaptionSuggestions, generateImage, editImage, suggestScheduleTime, analyzeImageForPost } from './ai.service';
+import { generateCaptionSuggestions, generateImage, editImage, suggestScheduleTime, analyzeImageForPost, generateCarouselSlides } from './ai.service';
 
 interface GenerateImageBody {
   prompt: string;
@@ -67,6 +67,21 @@ export async function editImageHandler(
 ): Promise<void> {
   const { imageDataUrl, maskDataUrl, instruction } = request.body;
   const result = await editImage({ imageDataUrl, maskDataUrl, instruction });
+  reply.code(200).send({ success: true, data: result });
+}
+
+interface CarouselSlidesBody {
+  topic:  string;
+  count:  number;
+  style?: string;
+}
+
+export async function carouselSlidesHandler(
+  request: FastifyRequest<{ Body: CarouselSlidesBody }>,
+  reply:   FastifyReply,
+): Promise<void> {
+  const { topic, count, style } = request.body;
+  const result = await generateCarouselSlides({ topic, count, style });
   reply.code(200).send({ success: true, data: result });
 }
 
