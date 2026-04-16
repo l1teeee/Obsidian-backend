@@ -143,12 +143,8 @@ export async function logoutHandler(
   reply: FastifyReply,
 ): Promise<void> {
   const refreshToken = request.cookies?.[RT_NAME];
-  console.log('[logout] cookie present:', !!refreshToken);
   if (refreshToken) {
     await authService.logoutByRefreshToken(refreshToken);
-    console.log('[logout] session closed via refresh token');
-  } else {
-    console.log('[logout] no refresh token cookie — nothing to close');
   }
   clearSessionCookies(reply);
   reply.send({ success: true, data: null });

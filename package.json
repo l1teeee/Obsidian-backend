@@ -19,17 +19,24 @@
     "@fastify/jwt": "^10.0.0",
     "@fastify/multipart": "^9.4.0",
     "@fastify/rate-limit": "^10.3.0",
+    "@getbrevo/brevo": "^5.0.4",
+    "@react-email/components": "^1.0.12",
+    "@react-email/render": "^2.0.6",
     "@types/bcryptjs": "^2.4.6",
     "bcryptjs": "^3.0.3",
     "dotenv": "^16.4.5",
     "fastify": "^5.8.4",
     "fastify-plugin": "^4.5.1",
     "jsonwebtoken": "^9.0.2",
-    "mysql2": "^3.9.7"
+    "mysql2": "^3.9.7",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.6",
     "@types/node": "^20.14.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "tsx": "^4.21.0",
     "typescript": "^5.4.5"
   }

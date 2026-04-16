@@ -43,6 +43,10 @@ export const env = {
   INSTAGRAM_REDIRECT_URL: process.env['INSTAGRAM_REDIRECT_URL'] ?? 'http://localhost:3000/platforms/connect/instagram/oauth/callback',
   // AES-256-GCM key for encrypting OAuth access tokens at rest (64 hex chars = 32 bytes)
   TOKEN_ENCRYPTION_KEY: required('TOKEN_ENCRYPTION_KEY'),
+  // Brevo (email)
+  BREVO_API_KEY:      required('BREVO_API_KEY'),
+  BREVO_SENDER_EMAIL: required('BREVO_SENDER_EMAIL'),
+  BREVO_SENDER_NAME:  process.env['BREVO_SENDER_NAME'] ?? 'Obsidian Dashboard',
   // AWS S3
   AWS_REGION:            required('AWS_REGION'),
   AWS_ACCESS_KEY_ID:     required('AWS_ACCESS_KEY_ID'),

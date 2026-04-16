@@ -4,6 +4,7 @@ import { uid }            from '../../lib/uid';
 import { decryptToken }   from '../../lib/crypto';
 import { S3_PUBLIC_URL }  from '../../lib/s3';
 import { promoteToPost, deleteS3Objects } from '../media/media.service';
+import { sendPostCreatedEmail } from '../../lib/email';
 
 // ─── Facebook publishing ──────────────────────────────────────────────────────
 
@@ -534,7 +535,27 @@ export async function createPost(userId: string, data: CreatePostData): Promise<
     );
   }
 
-  return getById(id, userId);
+  const post = await getById(id, userId);
+
+  // Fire-and-forget email
+  const [userRows] = await pool.query<(RowDataPacket & { email: string; name: string | null })[]>(
+    'SELECT email, name FROM users WHERE id = ? LIMIT 1',
+    [userId],
+  );
+  if (userRows[0]) {
+    const scheduledLabel = data.scheduled_at
+      ? new Date(data.scheduled_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Mexico_City' })
+      : undefined;
+    sendPostCreatedEmail(userRows[0].email, {
+      name:        userRows[0].name ?? undefined,
+      platform:    data.platform ?? 'unknown',
+      status:      status,
+      caption:     data.caption ?? undefined,
+      scheduledAt: scheduledLabel,
+    });
+  }
+
+  return post;
 }
 
 export async function updatePost(id: string, userId: string, data: UpdatePostData): Promise<Post> {

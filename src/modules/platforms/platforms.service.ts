@@ -4,6 +4,7 @@ import { uid } from '../../lib/uid';
 import { env } from '../../config/env';
 import { cache } from '../../lib/cache';
 import { encryptToken, decryptToken } from '../../lib/crypto';
+import { sendPlatformConnectedEmail } from '../../lib/email';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -342,6 +343,19 @@ export async function handleInstagramDirectCallback(userId: string, code: string
       'instagram_business_basic,instagram_business_content_publish',
     ],
   );
+
+  // Fire-and-forget email
+  const [userRows] = await pool.query<(RowDataPacket & { email: string; name: string | null })[]>(
+    'SELECT email, name FROM users WHERE id = ? LIMIT 1',
+    [userId],
+  );
+  if (userRows[0]) {
+    sendPlatformConnectedEmail(userRows[0].email, {
+      name:        userRows[0].name ?? undefined,
+      platform:    'instagram',
+      accountName: me.username ?? me.name ?? 'Instagram',
+    });
+  }
 }
 
 export async function listConnections(userId: string): Promise<SocialConnection[]> {
@@ -601,5 +615,18 @@ export async function handleFacebookCallback(userId: string, code: string, grant
     throw err;
   } finally {
     dbConn.release();
+  }
+
+  // Fire-and-forget email
+  const [userRows] = await pool.query<(RowDataPacket & { email: string; name: string | null })[]>(
+    'SELECT email, name FROM users WHERE id = ? LIMIT 1',
+    [userId],
+  );
+  if (userRows[0]) {
+    sendPlatformConnectedEmail(userRows[0].email, {
+      name:        userRows[0].name ?? undefined,
+      platform:    'facebook',
+      accountName: me.name,
+    });
   }
 }

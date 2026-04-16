@@ -5,6 +5,7 @@ import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
 import { env } from '../../config/env';
 import { uid } from '../../lib/uid';
+import { sendLoginNotification, sendVerificationEmail } from '../../lib/email';
 
 interface UserRow extends RowDataPacket {
   id:                         string;
@@ -101,10 +102,7 @@ export async function register(
     [id, email, passwordHash, verificationCode],
   );
 
-  // Mock email — in production this would call an email service (e.g. Resend, SendGrid)
-  if (process.env['NODE_ENV'] !== 'production') {
-    console.log(`[EMAIL MOCK] Verification code for <${email}>: ${verificationCode}`);
-  }
+  sendVerificationEmail(email, verificationCode);
 
   return {
     email,
@@ -154,9 +152,7 @@ export async function resendVerification(email: string): Promise<{ devVerifyToke
     [verificationCode, user.id],
   );
 
-  if (process.env['NODE_ENV'] !== 'production') {
-    console.log(`[EMAIL MOCK] New verification code for <${email}>: ${verificationCode}`);
-  }
+  sendVerificationEmail(email, verificationCode);
 
   return process.env['NODE_ENV'] !== 'production' ? { devVerifyToken: verificationCode } : {};
 }
@@ -168,7 +164,7 @@ export async function login(
   force = false,
 ): Promise<TokenPair | SessionConflict> {
   const [rows] = await pool.query<UserRow[]>(
-    'SELECT id, email, password_hash, first_login, profile_completed, email_verified, max_sessions, is_active FROM users WHERE email = ? LIMIT 1',
+    'SELECT id, email, password_hash, name, first_login, profile_completed, email_verified, max_sessions, is_active FROM users WHERE email = ? LIMIT 1',
     [email],
   );
 
@@ -186,6 +182,7 @@ export async function login(
     const tokens = signTokens(user.id, user.email, profileCompleted);
     await storeRefreshToken(user.id, tokens.refreshToken, deviceInfo);
     await pool.query('UPDATE users SET is_active = 1 WHERE id = ?', [user.id]);
+    sendLoginNotification(user.email, user.name ?? undefined);
     return { ...tokens, isFirstLogin: Boolean(user.first_login), profileCompleted };
   }
 
@@ -218,6 +215,7 @@ export async function login(
   const tokens = signTokens(user.id, user.email, profileCompleted);
   await storeRefreshToken(user.id, tokens.refreshToken, deviceInfo);
   await pool.query('UPDATE users SET is_active = 1 WHERE id = ?', [user.id]);
+  sendLoginNotification(user.email, user.name ?? undefined);
 
   return { ...tokens, isFirstLogin: Boolean(user.first_login), profileCompleted };
 }
@@ -278,17 +276,11 @@ export async function logoutByRefreshToken(refreshToken: string): Promise<void> 
     const payload = jwt.decode(refreshToken) as { id?: string } | null;
     userId = payload?.id;
   } catch {
-    console.log('[logoutByRefreshToken] malformed token');
     return;
   }
-  if (!userId) {
-    console.log('[logoutByRefreshToken] no userId in token payload');
-    return;
-  }
-  console.log('[logoutByRefreshToken] closing session for userId:', userId);
+  if (!userId) return;
   await pool.query('UPDATE refresh_tokens SET is_active = 0 WHERE user_id = ?', [userId]);
   await pool.query('UPDATE users SET is_active = 0, sessions_invalidated_at = NOW() WHERE id = ?', [userId]);
-  console.log('[logoutByRefreshToken] done');
 }
 
 export async function getSessions(userId: string): Promise<ActiveSession[]> {
