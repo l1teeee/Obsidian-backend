@@ -13,8 +13,7 @@ export interface GenerateImageResult {
 }
 
 export interface EditImageOptions {
-  imageDataUrl: string;   // 1024×1024 PNG, base64 data URL — prepared by the client
-  maskDataUrl:  string;   // 1024×1024 fully-transparent PNG — lets model edit everywhere
+  imageDataUrl: string;   // base64 data URL of the original image (JPEG or PNG)
   instruction:  string;   // what the user wants to change
 }
 
@@ -69,56 +68,57 @@ export async function generateImage(options: GenerateImageOptions): Promise<Gene
 
 export async function editImage(options: EditImageOptions): Promise<EditImageResult> {
   if (!env.OPENAI_API_KEY) {
-    throw appError(
-      'AI_NOT_CONFIGURED',
-      'OpenAI API key not configured. Set OPENAI_API_KEY in the server environment.',
-      503,
-    );
+    throw appError('AI_NOT_CONFIGURED', 'OpenAI API key not configured.', 503);
   }
 
-  function base64ToBuffer(dataUrl: string): Buffer {
-    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-    return Buffer.from(base64, 'base64');
-  }
-
-  const imageBuffer = base64ToBuffer(options.imageDataUrl);
-  const maskBuffer  = base64ToBuffer(options.maskDataUrl);
-
-  // Prompt enforces minimal changes — the structural rule for this feature.
-  const prompt =
-    `Apply only this specific change: ${options.instruction}. ` +
-    `Do not alter anything else. Preserve all other elements — ` +
-    `composition, colors, background, lighting, style, and subjects — exactly as they are.`;
-
-  const formData = new FormData();
-  formData.append('model',           'dall-e-2');
-  formData.append('image',           new File([imageBuffer], 'image.png', { type: 'image/png' }));
-  formData.append('mask',            new File([maskBuffer],  'mask.png',  { type: 'image/png' }));
-  formData.append('prompt',          prompt);
-  formData.append('n',               '1');
-  formData.append('size',            '1024x1024');
-  formData.append('response_format', 'b64_json');
-
-  const res = await fetch('https://api.openai.com/v1/images/edits', {
-    method:  'POST',
-    headers: { 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
-    body:    formData,
+  // Step 1: GPT-4o Vision — describe the image in detail for faithful reproduction
+  const visionRes = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o',
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: 'Describe this image in precise detail for exact DALL-E 3 reproduction. Cover: every visible subject and object, their positions, colors, textures, clothing/details, background elements, lighting direction and quality, overall mood, art style or photographic style, color palette. Be exhaustive and specific. Output only the description, no preamble.',
+          },
+          {
+            type:      'image_url',
+            image_url: { url: options.imageDataUrl, detail: 'high' },
+          },
+        ],
+      }],
+      max_tokens:  500,
+      temperature: 0.2,
+    }),
   });
 
-  if (!res.ok) {
+  if (!visionRes.ok) {
     interface OpenAIError { error?: { message: string } }
-    const body = await res.json() as OpenAIError;
-    throw appError('AI_ERROR', body.error?.message ?? 'DALL-E edit failed', 502);
+    const body = await visionRes.json() as OpenAIError;
+    throw appError('AI_ERROR', body.error?.message ?? 'GPT-4o vision failed', 502);
   }
 
-  interface EditResponse {
-    data: Array<{ b64_json: string }>;
-  }
-  const data = await res.json() as EditResponse;
-  const b64  = data.data[0]?.b64_json;
-  if (!b64) throw appError('AI_ERROR', 'Empty response from DALL-E edit', 502);
+  interface VisionResponse { choices: Array<{ message: { content: string | null } }> }
+  const visionData  = await visionRes.json() as VisionResponse;
+  const description = visionData.choices[0]?.message.content?.trim() ?? '';
 
-  return { dataUrl: `data:image/png;base64,${b64}` };
+  if (!description) throw appError('AI_ERROR', 'Could not read the image', 502);
+
+  // Step 2: DALL-E 3 — generate with the description + the requested modification
+  const editPrompt =
+    `${description}\n\n` +
+    `Apply ONLY this specific change: ${options.instruction}. ` +
+    `Keep every other element exactly as described above — ` +
+    `same subjects, composition, colors, lighting, background, and style.`;
+
+  const result = await generateImage({ prompt: editPrompt, size: '1024x1024' });
+  return { dataUrl: result.dataUrl };
 }
 
 export interface InspireOptions {

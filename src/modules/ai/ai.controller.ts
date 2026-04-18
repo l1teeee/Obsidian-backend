@@ -57,7 +57,6 @@ export async function suggestTimeHandler(
 
 interface EditImageBody {
   imageDataUrl: string;
-  maskDataUrl:  string;
   instruction:  string;
 }
 
@@ -65,8 +64,8 @@ export async function editImageHandler(
   request: FastifyRequest<{ Body: EditImageBody }>,
   reply:   FastifyReply,
 ): Promise<void> {
-  const { imageDataUrl, maskDataUrl, instruction } = request.body;
-  const result = await editImage({ imageDataUrl, maskDataUrl, instruction });
+  const { imageDataUrl, instruction } = request.body;
+  const result = await editImage({ imageDataUrl, instruction });
   reply.code(200).send({ success: true, data: result });
 }
 

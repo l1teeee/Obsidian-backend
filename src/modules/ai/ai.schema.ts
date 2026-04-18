@@ -1,10 +1,9 @@
 export const editImageSchema = {
   body: {
     type: 'object',
-    required: ['imageDataUrl', 'maskDataUrl', 'instruction'],
+    required: ['imageDataUrl', 'instruction'],
     properties: {
-      imageDataUrl: { type: 'string', maxLength: 5_000_000 },  // base64 PNG ~1-3 MB
-      maskDataUrl:  { type: 'string', maxLength: 500_000    },  // transparent PNG, tiny
+      imageDataUrl: { type: 'string', maxLength: 5_000_000 },  // base64 JPEG/PNG
       instruction:  { type: 'string', minLength: 3, maxLength: 1000 },
     },
     additionalProperties: false,
