@@ -41,7 +41,7 @@ export async function generateImage(options: GenerateImageOptions): Promise<Gene
       prompt:          options.prompt,
       n:               1,
       size:            options.size ?? '1024x1024',
-      quality:         'standard',
+      quality:         'hd',
       response_format: 'b64_json',   // ← base64 directly, no Azure URL needed
     }),
   });
@@ -71,54 +71,38 @@ export async function editImage(options: EditImageOptions): Promise<EditImageRes
     throw appError('AI_NOT_CONFIGURED', 'OpenAI API key not configured.', 503);
   }
 
-  // Step 1: GPT-4o Vision — describe the image in detail for faithful reproduction
-  const visionRes = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o',
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: 'Describe this image in precise detail for exact DALL-E 3 reproduction. Cover: every visible subject and object, their positions, colors, textures, clothing/details, background elements, lighting direction and quality, overall mood, art style or photographic style, color palette. Be exhaustive and specific. Output only the description, no preamble.',
-          },
-          {
-            type:      'image_url',
-            image_url: { url: options.imageDataUrl, detail: 'high' },
-          },
-        ],
-      }],
-      max_tokens:  500,
-      temperature: 0.2,
-    }),
+  // gpt-image-1: natively edits the image using the instruction — no regeneration
+  const match = options.imageDataUrl.match(/^data:image\/[^;]+;base64,(.+)$/);
+  if (!match) throw appError('AI_ERROR', 'Invalid image format', 400);
+
+  const buffer    = Buffer.from(match[1], 'base64');
+  const imageBlob = new Blob([buffer], { type: 'image/png' });
+
+  const form = new FormData();
+  form.append('model',  'gpt-image-1');
+  form.append('image',  imageBlob, 'image.png');
+  form.append('prompt', options.instruction);
+  form.append('n',      '1');
+  form.append('size',   '1024x1024');
+
+  const res = await fetch('https://api.openai.com/v1/images/edits', {
+    method:  'POST',
+    headers: { 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+    body:    form,
   });
 
-  if (!visionRes.ok) {
+  if (!res.ok) {
     interface OpenAIError { error?: { message: string } }
-    const body = await visionRes.json() as OpenAIError;
-    throw appError('AI_ERROR', body.error?.message ?? 'GPT-4o vision failed', 502);
+    const errBody = await res.json() as OpenAIError;
+    throw appError('AI_ERROR', errBody.error?.message ?? 'Image edit failed', 502);
   }
 
-  interface VisionResponse { choices: Array<{ message: { content: string | null } }> }
-  const visionData  = await visionRes.json() as VisionResponse;
-  const description = visionData.choices[0]?.message.content?.trim() ?? '';
+  interface EditResponse { data: Array<{ b64_json?: string }> }
+  const data  = await res.json() as EditResponse;
+  const image = data.data[0];
+  if (!image?.b64_json) throw appError('AI_ERROR', 'Empty response from image edit', 502);
 
-  if (!description) throw appError('AI_ERROR', 'Could not read the image', 502);
-
-  // Step 2: DALL-E 3 — generate with the description + the requested modification
-  const editPrompt =
-    `${description}\n\n` +
-    `Apply ONLY this specific change: ${options.instruction}. ` +
-    `Keep every other element exactly as described above — ` +
-    `same subjects, composition, colors, lighting, background, and style.`;
-
-  const result = await generateImage({ prompt: editPrompt, size: '1024x1024' });
-  return { dataUrl: result.dataUrl };
+  return { dataUrl: `data:image/png;base64,${image.b64_json}` };
 }
 
 export interface InspireOptions {
@@ -421,24 +405,26 @@ export async function generateCarouselSlides(options: CarouselSlidesOptions): Pr
 
   const styleInstruction = style?.trim()
     ? `Visual style (FIXED — append this EXACT string to every prompt, word for word): "${style.trim()}"`
-    : `STEP 1 — Choose ONE visual style that fits the topic. Then append that EXACT style string to every prompt below.`;
+    : `STEP 1 — Choose ONE cohesive visual style that best fits the topic (e.g. "flat vector illustration, bold outlines, vibrant colors, clean white background" or "professional photography, natural lighting, cinematic composition"). Then append that EXACT style string to every prompt below.`;
 
-  const userPrompt = `You are an expert DALL-E prompt writer for social media carousel posts.
+  const userPrompt = `You are an expert DALL-E prompt writer for social media carousel posts. Your prompts must produce visually stunning, professional images.
 
 Topic: "${topic}"
 Number of slides: ${n}
 ${styleInstruction}
 
 Write exactly ${n} image prompts — one per slide:
-- Each describes ONE single scene/step only. No collages, grids, multi-panel images.
+- Each describes ONE single, visually rich scene. No collages, grids, split panels.
+- Include specific visual details: colors, materials, lighting, mood, composition angle, focal point.
+- Logical narrative arc (introduction → development → conclusion/CTA).
+- No text, labels, numbers, or watermarks in the scene.
+- Make each scene visually distinct but stylistically coherent with the others.
 - Every prompt MUST end with the same style string — identical across all slides.
-- Logical narrative order (first step → last step).
-- No slide numbers, labels, or text overlays.
-- IMPORTANT: Detect the language of the topic and write the scene descriptions in that same language. The style string stays in English.
+- IMPORTANT: Write scene descriptions in the same language as the topic. The style string stays in English.
 
 Return ONLY valid JSON (no markdown, no explanation):
 {
-  "slides": ["<scene>, <style>", "<scene>, <style>", ...]
+  "slides": ["<detailed scene description>, <style>", ...]
 }`;
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {

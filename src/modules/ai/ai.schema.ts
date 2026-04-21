@@ -3,7 +3,7 @@ export const editImageSchema = {
     type: 'object',
     required: ['imageDataUrl', 'instruction'],
     properties: {
-      imageDataUrl: { type: 'string', maxLength: 5_000_000 },  // base64 JPEG/PNG
+      imageDataUrl: { type: 'string', maxLength: 7_000_000 },  // base64 PNG (square, max ~5MB)
       instruction:  { type: 'string', minLength: 3, maxLength: 1000 },
     },
     additionalProperties: false,
