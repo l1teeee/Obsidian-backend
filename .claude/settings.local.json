@@ -32,7 +32,10 @@
       "Bash(npm i:*)",
       "Bash(find /c/Proyects/obsidian-backend -type f -name * ! -path */node_modules/* ! -path */.idea/* ! -path */.claude/*)",
       "Bash(npm list:*)",
-      "Bash(find /c/Proyects/obsidian-backend -maxdepth 1 -name .env* -o -name README* -o -name *.md)"
+      "Bash(find /c/Proyects/obsidian-backend -maxdepth 1 -name .env* -o -name README* -o -name *.md)",
+      "Bash(ls /mnt/)",
+      "Read(//c//**)",
+      "Bash(echo \"exit: $?\")"
     ]
   }
 }
