@@ -1,9 +1,10 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
 import * as service from './workspaces.service';
 
-type CreateBody = { name: string };
-type UpdateBody = { name: string };
-type IdParams   = { id: string };
+type CreateBody          = { name: string };
+type UpdateBody          = { name: string };
+type IdParams            = { id: string };
+type SetPreferredBody    = { channel: 'ig' | 'fb' | 'li' | null };
 
 export async function listHandler(
   request: FastifyRequest,
@@ -38,5 +39,21 @@ export async function deleteHandler(
   reply: FastifyReply
 ): Promise<void> {
   await service.deleteWorkspace(request.params.id, request.user.id);
+  reply.send({ success: true, data: null });
+}
+
+export async function getPreferredChannelHandler(
+  request: FastifyRequest<{ Params: IdParams }>,
+  reply: FastifyReply
+): Promise<void> {
+  const result = await service.getPreferredChannel(request.params.id, request.user.id);
+  reply.send({ success: true, data: result });
+}
+
+export async function setPreferredChannelHandler(
+  request: FastifyRequest<{ Params: IdParams; Body: SetPreferredBody }>,
+  reply: FastifyReply
+): Promise<void> {
+  await service.setPreferredChannel(request.params.id, request.user.id, request.body.channel);
   reply.send({ success: true, data: null });
 }

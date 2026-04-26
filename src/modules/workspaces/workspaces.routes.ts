@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import * as handlers from './workspaces.controller';
-import { createWorkspaceSchema, updateWorkspaceSchema } from './workspaces.schema';
+import { createWorkspaceSchema, updateWorkspaceSchema, setPreferredChannelSchema } from './workspaces.schema';
 
 const READ_LIMIT  = { max: 60, timeWindow: '1 minute' };
 const WRITE_LIMIT = { max: 20, timeWindow: '1 minute' };
@@ -12,4 +12,7 @@ export default async function workspacesRoutes(fastify: FastifyInstance): Promis
   fastify.post('/',     { schema: createWorkspaceSchema, config: { rateLimit: WRITE_LIMIT } }, handlers.createHandler);
   fastify.patch('/:id', { schema: updateWorkspaceSchema, config: { rateLimit: WRITE_LIMIT } }, handlers.updateHandler);
   fastify.delete('/:id',{                              config: { rateLimit: WRITE_LIMIT } }, handlers.deleteHandler);
+
+  fastify.get('/:id/preferred-channel',  { config: { rateLimit: READ_LIMIT  } },                                    handlers.getPreferredChannelHandler);
+  fastify.post('/:id/preferred-channel', { schema: setPreferredChannelSchema, config: { rateLimit: WRITE_LIMIT } }, handlers.setPreferredChannelHandler);
 }

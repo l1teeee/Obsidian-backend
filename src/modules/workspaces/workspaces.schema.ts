@@ -19,3 +19,19 @@ export const updateWorkspaceSchema = {
     },
   },
 };
+
+export const setPreferredChannelSchema = {
+  params: {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string', minLength: 1 } },
+  },
+  body: {
+    type: 'object',
+    required: ['channel'],
+    additionalProperties: false,
+    properties: {
+      channel: { type: ['string', 'null'], enum: ['ig', 'fb', 'li', null] },
+    },
+  },
+};

@@ -4,7 +4,7 @@ import type { AiSettings } from '../ai-settings/ai-settings.service';
 
 export interface GenerateImageOptions {
   prompt: string;
-  size?:  '1024x1024' | '1792x1024' | '1024x1792';
+  size?:  '1024x1024' | '1536x1024' | '1024x1536';
 }
 
 export interface GenerateImageResult {
@@ -37,32 +37,32 @@ export async function generateImage(options: GenerateImageOptions): Promise<Gene
       'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
     },
     body: JSON.stringify({
-      model:           'dall-e-3',
-      prompt:          options.prompt,
-      n:               1,
-      size:            options.size ?? '1024x1024',
-      quality:         'hd',
-      response_format: 'b64_json',   // ← base64 directly, no Azure URL needed
+      model:         'gpt-image-2',
+      prompt:        options.prompt,
+      n:             1,
+      size:          options.size ?? '1024x1024',
+      quality:       'high',
+      output_format: 'png',
     }),
   });
 
   if (!res.ok) {
     interface OpenAIError { error?: { message: string } }
     const body = await res.json() as OpenAIError;
-    throw appError('AI_ERROR', body.error?.message ?? 'DALL-E request failed', 502);
+    throw appError('AI_ERROR', body.error?.message ?? 'Image generation failed', 502);
   }
 
-  interface DalleResponse {
-    data: Array<{ b64_json: string; revised_prompt: string }>;
+  interface GptImageResponse {
+    data: Array<{ b64_json: string; revised_prompt?: string }>;
   }
-  const data  = await res.json() as DalleResponse;
+  const data  = await res.json() as GptImageResponse;
   const image = data.data[0];
 
-  if (!image?.b64_json) throw appError('AI_ERROR', 'Empty response from DALL-E', 502);
+  if (!image?.b64_json) throw appError('AI_ERROR', 'Empty response from gpt-image-2', 502);
 
   return {
     dataUrl:        `data:image/png;base64,${image.b64_json}`,
-    revised_prompt: image.revised_prompt ?? options.prompt,
+    revised_prompt: image.revised_prompt ?? '',
   };
 }
 
