@@ -19,7 +19,8 @@ jobs:
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
             nvm use 20
             cd /home/ubuntu/Obsidian-backend || exit 1
-            git pull origin main || exit 1
+            git fetch origin main || exit 1
+            git reset --hard origin/main || exit 1
             npm ci || exit 1
             npm run build || exit 1
             pm2 restart all --update-env || exit 1
