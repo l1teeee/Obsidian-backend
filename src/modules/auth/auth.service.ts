@@ -381,7 +381,7 @@ export async function verifyResetOtp(email: string, otp: string): Promise<void> 
 
   const user = rows[0];
 
-  if (new Date() > user.password_reset_expires_at) {
+  if (new Date() > user.password_reset_expires_at!) {
     await pool.query(
       'UPDATE users SET password_reset_otp = NULL, password_reset_expires_at = NULL WHERE id = ?',
       [user.id],
@@ -430,7 +430,7 @@ export async function resetPassword(email: string, otp: string, newPassword: str
 
   const user = rows[0];
 
-  if (new Date() > user.password_reset_expires_at) {
+  if (new Date() > user.password_reset_expires_at!) {
     await pool.query(
       'UPDATE users SET password_reset_otp = NULL, password_reset_expires_at = NULL WHERE id = ?',
       [user.id],
