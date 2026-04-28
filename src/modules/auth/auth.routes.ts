@@ -30,6 +30,18 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     config: { rateLimit: STRICT_LIMIT },
   }, controller.googleLoginHandler);
 
+  fastify.post('/forgot-password', {
+    config: { rateLimit: { max: 3, timeWindow: '5 minutes' } },
+  }, controller.forgotPasswordHandler);
+
+  fastify.post('/verify-reset-otp', {
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+  }, controller.verifyResetOtpHandler);
+
+  fastify.post('/reset-password', {
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+  }, controller.resetPasswordHandler);
+
   fastify.post('/refresh', {
     config: { rateLimit: REFRESH_LIMIT },
     schema: refreshSchema,

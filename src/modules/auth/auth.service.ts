@@ -6,22 +6,24 @@ import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
 import { env } from '../../config/env';
 import { uid } from '../../lib/uid';
-import { sendLoginNotification, sendVerificationEmail } from '../../lib/email';
+import { sendLoginNotification, sendVerificationEmail, sendPasswordResetEmail } from '../../lib/email';
 
 const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET);
 
 interface UserRow extends RowDataPacket {
-  id:                         string;
-  email:                      string;
-  password_hash:              string;
-  name:                       string | null;
-  first_login:                number;
-  profile_completed:          number;
-  email_verified:             number;
-  email_verification_token:   string | null;
-  max_sessions:               number;
-  sessions_invalidated_at:    Date | null;
-  is_active:                  number;
+  id:                           string;
+  email:                        string;
+  password_hash:                string;
+  name:                         string | null;
+  first_login:                  number;
+  profile_completed:            number;
+  email_verified:               number;
+  email_verification_token:     string | null;
+  max_sessions:                 number;
+  sessions_invalidated_at:      Date | null;
+  is_active:                    number;
+  password_reset_otp:           string | null;
+  password_reset_expires_at:    Date | null;
 }
 
 interface RefreshTokenRow extends RowDataPacket {
@@ -31,6 +33,11 @@ interface RefreshTokenRow extends RowDataPacket {
   device_info: string | null;
   created_at:  Date;
   is_active:   number;
+}
+
+interface PasswordHistoryRow extends RowDataPacket {
+  id:            number;
+  password_hash: string;
 }
 
 export interface ActiveSession {
@@ -357,8 +364,128 @@ export async function loginWithGoogle(code: string, deviceInfo?: string): Promis
   const tokens = signTokens(userId, email, profileCompleted);
   await storeRefreshToken(userId, tokens.refreshToken, deviceInfo);
   await pool.query('UPDATE users SET is_active = 1 WHERE id = ?', [userId]);
+  sendLoginNotification(email, name ?? undefined);
 
   return { ...tokens, isFirstLogin, profileCompleted };
+}
+
+export async function verifyResetOtp(email: string, otp: string): Promise<void> {
+  const [rows] = await pool.query<UserRow[]>(
+    'SELECT id, password_reset_otp, password_reset_expires_at FROM users WHERE email = ? LIMIT 1',
+    [email],
+  );
+
+  if (rows.length === 0 || !rows[0].password_reset_otp || !rows[0].password_reset_expires_at) {
+    throw appError('INVALID_OTP', 'Invalid or expired code', 400);
+  }
+
+  const user = rows[0];
+
+  if (new Date() > user.password_reset_expires_at) {
+    await pool.query(
+      'UPDATE users SET password_reset_otp = NULL, password_reset_expires_at = NULL WHERE id = ?',
+      [user.id],
+    );
+    throw appError('OTP_EXPIRED', 'Code has expired. Request a new one.', 400);
+  }
+
+  const hash = crypto.createHash('sha256').update(otp).digest('hex');
+  if (hash !== user.password_reset_otp) {
+    throw appError('INVALID_OTP', 'Invalid or expired code', 400);
+  }
+}
+
+export async function requestPasswordReset(email: string): Promise<{ devOtp?: string }> {
+  const [rows] = await pool.query<UserRow[]>(
+    'SELECT id FROM users WHERE email = ? AND email_verified = 1 LIMIT 1',
+    [email],
+  );
+
+  // Always return success — never reveal whether the email exists
+  if (rows.length === 0) return {};
+
+  const otp       = String(Math.floor(100000 + Math.random() * 900000));
+  const hash      = crypto.createHash('sha256').update(otp).digest('hex');
+  const expiresAt = new Date(Date.now() + 60 * 1000); // 1 minute
+
+  await pool.query(
+    'UPDATE users SET password_reset_otp = ?, password_reset_expires_at = ? WHERE id = ?',
+    [hash, expiresAt, rows[0].id],
+  );
+
+  sendPasswordResetEmail(email, otp);
+
+  return process.env['NODE_ENV'] !== 'production' ? { devOtp: otp } : {};
+}
+
+export async function resetPassword(email: string, otp: string, newPassword: string): Promise<void> {
+  const [rows] = await pool.query<UserRow[]>(
+    'SELECT id, password_reset_otp, password_reset_expires_at FROM users WHERE email = ? LIMIT 1',
+    [email],
+  );
+
+  if (rows.length === 0 || !rows[0].password_reset_otp || !rows[0].password_reset_expires_at) {
+    throw appError('INVALID_OTP', 'Invalid or expired code', 400);
+  }
+
+  const user = rows[0];
+
+  if (new Date() > user.password_reset_expires_at) {
+    await pool.query(
+      'UPDATE users SET password_reset_otp = NULL, password_reset_expires_at = NULL WHERE id = ?',
+      [user.id],
+    );
+    throw appError('OTP_EXPIRED', 'Code has expired. Request a new one.', 400);
+  }
+
+  const hash = crypto.createHash('sha256').update(otp).digest('hex');
+  if (hash !== user.password_reset_otp) {
+    throw appError('INVALID_OTP', 'Invalid or expired code', 400);
+  }
+
+  // Fetch current password + last 5 from history and check for reuse
+  const [currentRow] = await pool.query<UserRow[]>(
+    'SELECT password_hash FROM users WHERE id = ? LIMIT 1',
+    [user.id],
+  );
+  const [historyRows] = await pool.query<PasswordHistoryRow[]>(
+    'SELECT password_hash FROM password_history WHERE user_id = ? ORDER BY created_at DESC LIMIT 4',
+    [user.id],
+  );
+
+  const recentHashes = [
+    ...(currentRow[0]?.password_hash ? [currentRow[0].password_hash] : []),
+    ...historyRows.map(r => r.password_hash),
+  ];
+
+  for (const recentHash of recentHashes) {
+    if (await bcrypt.compare(newPassword, recentHash)) {
+      throw appError('PASSWORD_PREVIOUSLY_USED', 'This password has been used recently. Please choose a different one.', 400);
+    }
+  }
+
+  // Archive current hash before overwriting
+  if (currentRow[0]?.password_hash) {
+    await pool.query(
+      'INSERT INTO password_history (user_id, password_hash) VALUES (?, ?)',
+      [user.id, currentRow[0].password_hash],
+    );
+    // Keep only last 5 entries
+    await pool.query(
+      'DELETE FROM password_history WHERE user_id = ? AND id NOT IN (SELECT id FROM (SELECT id FROM password_history WHERE user_id = ? ORDER BY created_at DESC LIMIT 5) AS t)',
+      [user.id, user.id],
+    );
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, env.BCRYPT_ROUNDS);
+  await pool.query(
+    'UPDATE users SET password_hash = ?, password_reset_otp = NULL, password_reset_expires_at = NULL WHERE id = ?',
+    [passwordHash, user.id],
+  );
+
+  // Invalidate all sessions after password change
+  await pool.query('UPDATE refresh_tokens SET is_active = 0 WHERE user_id = ?', [user.id]);
+  await pool.query('UPDATE users SET is_active = 0, sessions_invalidated_at = NOW() WHERE id = ?', [user.id]);
 }
 
 export async function forceLogoutAll(userId: string): Promise<void> {

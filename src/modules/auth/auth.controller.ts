@@ -28,9 +28,12 @@ const SID_OPTS = {
   ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
 };
 
-type RegisterBody    = { email: string; password: string };
-type LoginBody       = { email: string; password: string; rememberMe?: boolean; force?: boolean };
-type GoogleLoginBody = { code: string };
+type RegisterBody        = { email: string; password: string };
+type LoginBody           = { email: string; password: string; rememberMe?: boolean; force?: boolean };
+type GoogleLoginBody     = { code: string };
+type ForgotPasswordBody   = { email: string };
+type VerifyResetOtpBody   = { email: string; otp: string };
+type ResetPasswordBody    = { email: string; otp: string; password: string };
 
 function setSessionCookies(reply: FastifyReply, refreshToken: string, persistent = true): void {
   const maxAge = persistent ? RT_OPTS.maxAge : undefined;
@@ -40,7 +43,7 @@ function setSessionCookies(reply: FastifyReply, refreshToken: string, persistent
 
 function clearSessionCookies(reply: FastifyReply): void {
   reply.clearCookie(RT_NAME,  { path: '/auth' });
-  reply.clearCookie(SID_NAME, { path: '/' });
+  reply.clearCookie(SID_NAME, { path: '/', ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}) });
 }
 
 export async function registerHandler(
@@ -107,6 +110,30 @@ export async function googleLoginHandler(
     success: true,
     data: { accessToken: tokens.accessToken, isFirstLogin: tokens.isFirstLogin, profileCompleted: tokens.profileCompleted },
   });
+}
+
+export async function forgotPasswordHandler(
+  request: FastifyRequest<{ Body: ForgotPasswordBody }>,
+  reply: FastifyReply,
+): Promise<void> {
+  const result = await authService.requestPasswordReset(request.body.email);
+  reply.send({ success: true, data: result });
+}
+
+export async function verifyResetOtpHandler(
+  request: FastifyRequest<{ Body: VerifyResetOtpBody }>,
+  reply: FastifyReply,
+): Promise<void> {
+  await authService.verifyResetOtp(request.body.email, request.body.otp);
+  reply.send({ success: true, data: null });
+}
+
+export async function resetPasswordHandler(
+  request: FastifyRequest<{ Body: ResetPasswordBody }>,
+  reply: FastifyReply,
+): Promise<void> {
+  await authService.resetPassword(request.body.email, request.body.otp, request.body.password);
+  reply.send({ success: true, data: null });
 }
 
 export async function pingHandler(

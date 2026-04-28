@@ -4,6 +4,7 @@ import { BrevoClient, BrevoEnvironment } from '@getbrevo/brevo';
 import { env } from '../config/env';
 import { LoginNotification }    from './emails/LoginNotification';
 import { EmailVerification }    from './emails/EmailVerification';
+import { PasswordReset }        from './emails/PasswordReset';
 import { PostCreated }          from './emails/PostCreated';
 import { PlatformConnected }    from './emails/PlatformConnected';
 
@@ -25,7 +26,7 @@ export async function sendLoginNotification(toEmail: string, name?: string): Pro
   const now       = new Date();
   const loginDate = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/Mexico_City' });
   const loginTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Mexico_City' });
-  const changePasswordUrl = `${env.FRONTEND_URL}/settings`;
+  const changePasswordUrl = `${env.FRONTEND_URL}/forgot-password?email=${encodeURIComponent(toEmail)}`;
 
   const html = await render(
     React.createElement(LoginNotification, { email: toEmail, name, loginDate, loginTime, changePasswordUrl }),
@@ -45,6 +46,17 @@ export async function sendVerificationEmail(toEmail: string, code: string): Prom
     await send(toEmail, `${code} is your Vielink verification code`, html);
   } catch (err) {
     console.error('[EMAIL] verification email error:', err);
+  }
+}
+
+export async function sendPasswordResetEmail(toEmail: string, code: string): Promise<void> {
+  const html = await render(
+    React.createElement(PasswordReset, { email: toEmail, code }),
+  );
+  try {
+    await send(toEmail, `${code} is your Vielink password reset code`, html);
+  } catch (err) {
+    console.error('[EMAIL] password reset email error:', err);
   }
 }
 
