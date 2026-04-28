@@ -33,6 +33,9 @@ export const env = {
   // CORS: comma-separated list of allowed origins, e.g. "http://localhost:5173,https://app.example.com"
   CORS_ORIGINS:       process.env['CORS_ORIGINS'] ?? 'http://localhost:5173',
   COOKIE_SECRET:      required('COOKIE_SECRET'),
+  // Google OAuth
+  GOOGLE_CLIENT_ID:     process.env['GOOGLE_CLIENT_ID']     ?? '',
+  GOOGLE_CLIENT_SECRET: process.env['GOOGLE_CLIENT_SECRET'] ?? '',
   // Facebook / Instagram OAuth
   FACEBOOK_CLIENT_ID:     process.env['FACEBOOK_CLIENT_ID']     ?? '',
   FACEBOOK_CLIENT_SECRET: process.env['FACEBOOK_CLIENT_SECRET'] ?? '',

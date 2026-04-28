@@ -28,8 +28,9 @@ const SID_OPTS = {
   ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
 };
 
-type RegisterBody  = { email: string; password: string };
-type LoginBody     = { email: string; password: string; rememberMe?: boolean; force?: boolean };
+type RegisterBody    = { email: string; password: string };
+type LoginBody       = { email: string; password: string; rememberMe?: boolean; force?: boolean };
+type GoogleLoginBody = { code: string };
 
 function setSessionCookies(reply: FastifyReply, refreshToken: string, persistent = true): void {
   const maxAge = persistent ? RT_OPTS.maxAge : undefined;
@@ -92,6 +93,19 @@ export async function loginHandler(
   reply.send({
     success: true,
     data: { accessToken: result.accessToken, isFirstLogin: result.isFirstLogin, profileCompleted: result.profileCompleted },
+  });
+}
+
+export async function googleLoginHandler(
+  request: FastifyRequest<{ Body: GoogleLoginBody }>,
+  reply: FastifyReply,
+): Promise<void> {
+  const deviceInfo = request.headers['user-agent']?.slice(0, 500);
+  const tokens = await authService.loginWithGoogle(request.body.code, deviceInfo);
+  setSessionCookies(reply, tokens.refreshToken);
+  reply.send({
+    success: true,
+    data: { accessToken: tokens.accessToken, isFirstLogin: tokens.isFirstLogin, profileCompleted: tokens.profileCompleted },
   });
 }
 

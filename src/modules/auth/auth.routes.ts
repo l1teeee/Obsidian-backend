@@ -26,6 +26,10 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     schema: loginSchema,
   }, controller.loginHandler);
 
+  fastify.post('/google', {
+    config: { rateLimit: STRICT_LIMIT },
+  }, controller.googleLoginHandler);
+
   fastify.post('/refresh', {
     config: { rateLimit: REFRESH_LIMIT },
     schema: refreshSchema,

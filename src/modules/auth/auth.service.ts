@@ -1,11 +1,14 @@
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
+import { OAuth2Client } from 'google-auth-library';
 import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
 import { env } from '../../config/env';
 import { uid } from '../../lib/uid';
 import { sendLoginNotification, sendVerificationEmail } from '../../lib/email';
+
+const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET);
 
 interface UserRow extends RowDataPacket {
   id:                         string;
@@ -293,6 +296,69 @@ export async function getSessions(userId: string): Promise<ActiveSession[]> {
     device_info: r.device_info,
     created_at:  r.created_at.toISOString(),
   }));
+}
+
+export async function loginWithGoogle(code: string, deviceInfo?: string): Promise<TokenPair> {
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id:     env.GOOGLE_CLIENT_ID,
+      client_secret: env.GOOGLE_CLIENT_SECRET,
+      redirect_uri:  'postmessage',
+      grant_type:    'authorization_code',
+    }),
+  });
+
+  const tokenData = await tokenRes.json() as { id_token?: string; error?: string };
+
+  if (!tokenRes.ok || !tokenData.id_token) {
+    throw appError('GOOGLE_AUTH_FAILED', tokenData.error ?? 'Google token exchange failed', 400);
+  }
+
+  const ticket = await googleClient.verifyIdToken({
+    idToken:  tokenData.id_token,
+    audience: env.GOOGLE_CLIENT_ID,
+  });
+
+  const payload = ticket.getPayload();
+  if (!payload?.email) {
+    throw appError('GOOGLE_AUTH_FAILED', 'Could not retrieve email from Google account', 400);
+  }
+
+  const { email, name } = payload;
+
+  const [rows] = await pool.query<UserRow[]>(
+    'SELECT id, email, profile_completed, first_login, is_active FROM users WHERE email = ? LIMIT 1',
+    [email],
+  );
+
+  let userId: string;
+  let isFirstLogin: boolean;
+  let profileCompleted: boolean;
+
+  if (rows.length > 0) {
+    const user = rows[0];
+    userId           = user.id;
+    isFirstLogin     = Boolean(user.first_login);
+    profileCompleted = Boolean(user.profile_completed);
+  } else {
+    userId           = uid();
+    isFirstLogin     = true;
+    profileCompleted = false;
+    const placeholderHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), env.BCRYPT_ROUNDS);
+    await pool.query<ResultSetHeader>(
+      'INSERT INTO users (id, email, password_hash, name, email_verified, is_active) VALUES (?, ?, ?, ?, 1, 1)',
+      [userId, email, placeholderHash, name ?? null],
+    );
+  }
+
+  const tokens = signTokens(userId, email, profileCompleted);
+  await storeRefreshToken(userId, tokens.refreshToken, deviceInfo);
+  await pool.query('UPDATE users SET is_active = 1 WHERE id = ?', [userId]);
+
+  return { ...tokens, isFirstLogin, profileCompleted };
 }
 
 export async function forceLogoutAll(userId: string): Promise<void> {
