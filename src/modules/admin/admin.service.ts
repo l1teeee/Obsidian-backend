@@ -86,6 +86,7 @@ interface TopWsRow extends RowDataPacket {
   owner_email: string;
   owner_name:  string | null;
   post_count:  number;
+  is_active:   number;
   created_at:  Date;
 }
 
@@ -169,13 +170,14 @@ export async function getOverview(): Promise<AdminOverview> {
   // Posts have no workspace_id — they're user-scoped.
   const [topRows] = await pool.query<TopWsRow[]>(`
     SELECT
-      MIN(w.id)         AS id,
-      MIN(w.name)       AS name,
-      u.id              AS user_id,
-      u.email           AS owner_email,
-      u.name            AS owner_name,
-      COUNT(DISTINCT p.id) AS post_count,
-      MIN(w.created_at) AS created_at
+      MIN(w.id)                        AS id,
+      MIN(w.name)                      AS name,
+      u.id                             AS user_id,
+      u.email                          AS owner_email,
+      u.name                           AS owner_name,
+      COUNT(DISTINCT p.id)             AS post_count,
+      COALESCE(MIN(w.is_active), 1)    AS is_active,
+      MIN(w.created_at)                AS created_at
     FROM users u
     LEFT JOIN workspaces w ON w.user_id = u.id
     LEFT JOIN posts p ON p.user_id = u.id AND p.status != 'deleted'
@@ -201,6 +203,7 @@ export async function getOverview(): Promise<AdminOverview> {
       owner_email: r.owner_email,
       owner_name:  r.owner_name,
       post_count:  Number(r.post_count),
+      is_active:   Boolean(r.is_active),
       created_at:  r.created_at,
     })),
   };
