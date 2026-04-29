@@ -17,15 +17,26 @@ interface FbConnection extends RowDataPacket {
   scopes:            string;
 }
 
-async function getFbConnection(userId: string): Promise<FbConnection> {
-  const [rows] = await pool.query<FbConnection[]>(
-    `SELECT access_token, user_access_token, page_id, page_name, token_expires_at, scopes
-     FROM social_connections
-     WHERE user_id = ? AND platform = 'facebook' AND page_id IS NOT NULL AND is_active = 1
-     LIMIT 1`,
-    [userId],
-  );
-  if (!rows[0]) throw appError('NO_FB_CONNECTION', 'No Facebook page connected. Connect a Facebook account first.', 422);
+async function getFbConnection(userId: string, pageId?: string | null): Promise<FbConnection> {
+  const query = pageId
+    ? `SELECT access_token, user_access_token, page_id, page_name, token_expires_at, scopes
+       FROM social_connections
+       WHERE user_id = ? AND platform = 'facebook' AND page_id = ? AND is_active = 1
+       LIMIT 1`
+    : `SELECT access_token, user_access_token, page_id, page_name, token_expires_at, scopes
+       FROM social_connections
+       WHERE user_id = ? AND platform = 'facebook' AND page_id IS NOT NULL AND is_active = 1
+       LIMIT 1`;
+
+  const params = pageId ? [userId, pageId] : [userId];
+  const [rows] = await pool.query<FbConnection[]>(query, params);
+
+  if (!rows[0]) {
+    const msg = pageId
+      ? `Facebook page ${pageId} not found. Make sure it is still connected.`
+      : 'No Facebook page connected. Connect a Facebook account first.';
+    throw appError('NO_FB_CONNECTION', msg, 422);
+  }
 
   const conn = rows[0];
   conn.access_token = decryptToken(conn.access_token);
@@ -90,8 +101,8 @@ function isVideoUrl(url: string): boolean {
   return /\.(mp4|mov|webm|avi)(\?|$)/i.test(url);
 }
 
-async function publishToFacebook(userId: string, caption: string, mediaUrls: string[]): Promise<FbPublishResult> {
-  const conn = await getFbConnection(userId);
+async function publishToFacebook(userId: string, caption: string, mediaUrls: string[], pageId?: string | null): Promise<FbPublishResult> {
+  const conn = await getFbConnection(userId, pageId);
 
   // Single video: use /videos endpoint (file_url + description)
   if (mediaUrls.length === 1 && isVideoUrl(mediaUrls[0])) {
@@ -416,6 +427,7 @@ export interface CreatePostData {
   media_urls?:  string[];
   scheduled_at?: string;
   status?:      string;
+  page_id?:     string | null;
 }
 
 export interface UpdatePostData {
@@ -427,6 +439,7 @@ export interface UpdatePostData {
   scheduled_at?: string;
   published_at?: string;
   status?:      string;
+  page_id?:     string | null;
 }
 
 function appError(errorCode: string, message: string, statusCode: number): Error {
@@ -519,7 +532,7 @@ export async function createPost(userId: string, data: CreatePostData): Promise<
 
   // Publish immediately to Facebook if requested
   if (status === 'published' && data.platform === 'facebook') {
-    const result = await publishToFacebook(userId, data.caption ?? '', finalMediaUrls);
+    const result = await publishToFacebook(userId, data.caption ?? '', finalMediaUrls, data.page_id);
     await pool.query(
       `UPDATE posts SET permalink = ?, platform_post_id = ?, published_at = NOW() WHERE id = ?`,
       [result.permalink, result.platformPostId, id],
@@ -608,7 +621,7 @@ export async function updatePost(id: string, userId: string, data: UpdatePostDat
       const caption = data.caption ?? post.caption ?? '';
 
       if (effectivePlatform === 'facebook') {
-        const result = await publishToFacebook(userId, caption, rawMediaUrls);
+        const result = await publishToFacebook(userId, caption, rawMediaUrls, data.page_id);
         await pool.query(
           `UPDATE posts SET permalink = ?, platform_post_id = ?, published_at = NOW() WHERE id = ?`,
           [result.permalink, result.platformPostId, id],
@@ -648,7 +661,9 @@ export async function deletePost(id: string, userId: string, removeFromPlatform 
   // Optionally remove from Facebook before marking deleted in DB
   if (removeFromPlatform && post.platform === 'facebook' && post.platform_post_id) {
     try {
-      const conn = await getFbConnection(userId);
+      // platform_post_id format: "{pageId}_{postId}" — use pageId to pick the right connection
+      const pageIdFromPost = post.platform_post_id.split('_')[0] || null;
+      const conn = await getFbConnection(userId, pageIdFromPost);
       const url  = new URL(`https://graph.facebook.com/v21.0/${post.platform_post_id}`);
       url.searchParams.set('access_token', conn.access_token);
       const res = await fetch(url.toString(), { method: 'DELETE' });
@@ -709,7 +724,9 @@ export async function getPostMetrics(postId: string, userId: string): Promise<Po
     return { likes: 0, comments: 0, shares: 0, reach: null, impressions: null, clicks: null, dev_mode: true };
   }
 
-  const conn  = await getFbConnection(userId);
+  // Extract pageId from platform_post_id (format: "{pageId}_{postId}") to use the correct connection
+  const pageIdFromPost = graphId.includes('_') ? graphId.split('_')[0] : null;
+  const conn  = await getFbConnection(userId, pageIdFromPost);
   const token = conn.access_token;
 
   // Use insights-based fields — same approach as metrics.service.ts which works

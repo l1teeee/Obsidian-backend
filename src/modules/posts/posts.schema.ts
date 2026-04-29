@@ -37,6 +37,7 @@ export const createPostSchema = {
       media_urls:   mediaUrlsSchema,
       scheduled_at: { type: 'string', format: 'date-time' },
       status:       statusEnum,
+      page_id:      { type: 'string', maxLength: 64, nullable: true },
     },
   },
 };
