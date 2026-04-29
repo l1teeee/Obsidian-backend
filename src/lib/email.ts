@@ -7,6 +7,8 @@ import { EmailVerification }    from './emails/EmailVerification';
 import { PasswordReset }        from './emails/PasswordReset';
 import { PostCreated }          from './emails/PostCreated';
 import { PlatformConnected }    from './emails/PlatformConnected';
+import { PostStatusChanged }    from './emails/PostStatusChanged';
+import { AccountStatusChanged } from './emails/AccountStatusChanged';
 
 const brevo = new BrevoClient({
   apiKey:      env.BREVO_API_KEY,
@@ -73,6 +75,50 @@ export async function sendPostCreatedEmail(
     await send(toEmail, `Your ${platformLabel} post has been ${opts.status}`, html);
   } catch (err) {
     console.error('[EMAIL] post created email error:', err);
+  }
+}
+
+export async function sendPostStatusChangedEmail(
+  toEmail: string,
+  opts: {
+    name?:         string;
+    platform:      string;
+    post_type:     string;
+    action:        'activated' | 'deactivated';
+    reason:        string;
+    caption?:      string;
+    permalink?:    string;
+    scheduled_at?: string;
+    published_at?: string;
+    created_at:    string;
+    postId:        string;
+  },
+): Promise<void> {
+  const { postId, ...rest } = opts;
+  const postUrl       = `${env.FRONTEND_URL}/posts/${postId}`;
+  const platformLabel = opts.platform.charAt(0).toUpperCase() + opts.platform.slice(1);
+  const html = await render(
+    React.createElement(PostStatusChanged, { ...rest, postUrl }),
+  );
+  try {
+    await send(toEmail, `Your ${platformLabel} post has been ${opts.action}`, html);
+  } catch (err) {
+    console.error('[EMAIL] post status changed email error:', err);
+  }
+}
+
+export async function sendAccountStatusChangedEmail(
+  toEmail: string,
+  opts: { name?: string; action: 'activated' | 'deactivated'; reason: string },
+): Promise<void> {
+  const loginUrl = `${env.FRONTEND_URL}/login`;
+  const html = await render(
+    React.createElement(AccountStatusChanged, { ...opts, loginUrl }),
+  );
+  try {
+    await send(toEmail, `Your Vielink account has been ${opts.action}`, html);
+  } catch (err) {
+    console.error('[EMAIL] account status changed email error:', err);
   }
 }
 

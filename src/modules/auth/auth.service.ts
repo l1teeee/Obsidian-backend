@@ -22,6 +22,7 @@ interface UserRow extends RowDataPacket {
   max_sessions:                 number;
   sessions_invalidated_at:      Date | null;
   is_active:                    number;
+  is_banned:                    number;
   password_reset_otp:           string | null;
   password_reset_expires_at:    Date | null;
 }
@@ -174,7 +175,7 @@ export async function login(
   force = false,
 ): Promise<TokenPair | SessionConflict> {
   const [rows] = await pool.query<UserRow[]>(
-    'SELECT id, email, password_hash, name, first_login, profile_completed, email_verified, max_sessions, is_active FROM users WHERE email = ? LIMIT 1',
+    'SELECT id, email, password_hash, name, first_login, profile_completed, email_verified, max_sessions, is_active, is_banned FROM users WHERE email = ? LIMIT 1',
     [email],
   );
 
@@ -185,6 +186,7 @@ export async function login(
   const passwordMatch = await bcrypt.compare(password, user.password_hash);
   if (!passwordMatch) throw appError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
   if (!user.email_verified) throw appError('EMAIL_NOT_VERIFIED', 'Please verify your email address before signing in', 403);
+  if (user.is_banned) throw appError('ACCOUNT_DISABLED', 'Your account has been deactivated. Please contact support.', 403);
 
   // Si is_active = 0 el usuario ya cerró sesión — dejar pasar sin conflicto
   if (!user.is_active && !force) {
@@ -255,7 +257,7 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   }
 
   const [userRows] = await pool.query<UserRow[]>(
-    'SELECT id, email, profile_completed FROM users WHERE id = ? LIMIT 1',
+    'SELECT id, email, profile_completed, is_banned FROM users WHERE id = ? LIMIT 1',
     [payload.id],
   );
 
@@ -263,6 +265,11 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
 
   if (!user) {
     throw appError('INVALID_TOKEN', 'User associated with token no longer exists', 401);
+  }
+
+  if (user.is_banned) {
+    await pool.query('UPDATE refresh_tokens SET is_active = 0 WHERE user_id = ?', [payload.id]);
+    throw appError('ACCOUNT_DISABLED', 'Your account has been deactivated. Please contact support.', 403);
   }
 
   await pool.query('UPDATE refresh_tokens SET is_active = 0 WHERE token = ?', [refreshToken]);
@@ -337,7 +344,7 @@ export async function loginWithGoogle(code: string, deviceInfo?: string): Promis
   const { email, name } = payload;
 
   const [rows] = await pool.query<UserRow[]>(
-    'SELECT id, email, profile_completed, first_login, is_active FROM users WHERE email = ? LIMIT 1',
+    'SELECT id, email, profile_completed, first_login, is_active, is_banned FROM users WHERE email = ? LIMIT 1',
     [email],
   );
 
@@ -347,6 +354,7 @@ export async function loginWithGoogle(code: string, deviceInfo?: string): Promis
 
   if (rows.length > 0) {
     const user = rows[0];
+    if (user.is_banned) throw appError('ACCOUNT_DISABLED', 'Your account has been deactivated. Please contact support.', 403);
     userId           = user.id;
     isFirstLogin     = Boolean(user.first_login);
     profileCompleted = Boolean(user.profile_completed);

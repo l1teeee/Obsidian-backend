@@ -45,7 +45,7 @@ async function getById(id: string, userId: string): Promise<Workspace> {
 
 export async function getWorkspaces(userId: string): Promise<Workspace[]> {
   const [rows] = await pool.query<WorkspaceRow[]>(
-    'SELECT * FROM workspaces WHERE user_id = ? ORDER BY created_at ASC',
+    'SELECT * FROM workspaces WHERE user_id = ? AND is_active = 1 ORDER BY created_at ASC',
     [userId]
   );
   return rows;
