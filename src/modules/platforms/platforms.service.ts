@@ -415,9 +415,8 @@ export async function handleFacebookCallback(userId: string, code: string, grant
   // 4. Pages (+ instagram_business_account + connected_instagram_account for Creator/personal profiles)
   const pagesResp = await fbGet<FbPagesResponse>('/me/accounts', userToken, {
     fields: 'id,name,access_token,instagram_business_account,connected_instagram_account',
+    limit:  '100',
   });
-
-  console.log('[FB OAuth] pages returned:', pagesResp.data.length, JSON.stringify(pagesResp.data.map(p => ({ id: p.id, name: p.name }))));
 
   const dbConn = await pool.getConnection();
   try {
