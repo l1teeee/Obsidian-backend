@@ -4,9 +4,13 @@ import * as platformsService from './platforms.service';
 
 // ─── List connections ─────────────────────────────────────────────────────────
 
-export async function getConnections(req: FastifyRequest, reply: FastifyReply) {
-  const userId = (req.user as { id: string }).id;
-  const connections = await platformsService.listConnections(userId);
+export async function getConnections(
+  req: FastifyRequest<{ Querystring: { workspaceId?: string } }>,
+  reply: FastifyReply,
+) {
+  const userId     = (req.user as { id: string }).id;
+  const workspaceId = req.query.workspaceId ?? null;
+  const connections = await platformsService.listConnections(userId, workspaceId);
   reply.send({ success: true, data: connections });
 }
 
@@ -23,9 +27,13 @@ export async function disconnect(
 
 // ─── Connect Instagram from existing FB pages ─────────────────────────────────
 
-export async function connectInstagramFromPages(req: FastifyRequest, reply: FastifyReply) {
-  const userId = (req.user as { id: string }).id;
-  const count  = await platformsService.linkInstagramFromExistingPages(userId);
+export async function connectInstagramFromPages(
+  req: FastifyRequest<{ Querystring: { workspaceId?: string } }>,
+  reply: FastifyReply,
+) {
+  const userId     = (req.user as { id: string }).id;
+  const workspaceId = req.query.workspaceId ?? null;
+  const count      = await platformsService.linkInstagramFromExistingPages(userId, workspaceId);
   if (count === 0) {
     return reply.code(404).send({
       success: false,
@@ -37,14 +45,17 @@ export async function connectInstagramFromPages(req: FastifyRequest, reply: Fast
 
 // ─── Initiate Facebook OAuth ──────────────────────────────────────────────────
 
-export async function initFacebookOAuth(req: FastifyRequest, reply: FastifyReply) {
+export async function initFacebookOAuth(
+  req: FastifyRequest<{ Querystring: { workspaceId?: string } }>,
+  reply: FastifyReply,
+) {
   if (!env.FACEBOOK_CLIENT_ID) {
     return reply.code(503).send({ success: false, error: { code: 'NOT_CONFIGURED', message: 'Facebook OAuth is not configured' } });
   }
 
-  // JWT-signed state for CSRF protection
-  const userId = (req.user as { id: string }).id;
-  const state  = req.server.jwt.sign({ userId, ts: Date.now() }, { expiresIn: '10m' });
+  const userId     = (req.user as { id: string }).id;
+  const workspaceId = req.query.workspaceId ?? null;
+  const state      = req.server.jwt.sign({ userId, workspaceId, ts: Date.now() }, { expiresIn: '10m' });
 
   const scopes = [
     'email',
@@ -71,13 +82,17 @@ export async function initFacebookOAuth(req: FastifyRequest, reply: FastifyReply
 
 // ─── Instagram direct OAuth (Camino B) ───────────────────────────────────────
 
-export async function initInstagramDirectOAuth(req: FastifyRequest, reply: FastifyReply) {
+export async function initInstagramDirectOAuth(
+  req: FastifyRequest<{ Querystring: { workspaceId?: string } }>,
+  reply: FastifyReply,
+) {
   if (!env.FACEBOOK_CLIENT_ID) {
     return reply.code(503).send({ success: false, error: { code: 'NOT_CONFIGURED', message: 'Instagram OAuth is not configured' } });
   }
 
-  const userId = (req.user as { id: string }).id;
-  const state  = req.server.jwt.sign({ userId, ts: Date.now() }, { expiresIn: '10m' });
+  const userId     = (req.user as { id: string }).id;
+  const workspaceId = req.query.workspaceId ?? null;
+  const state      = req.server.jwt.sign({ userId, workspaceId, ts: Date.now() }, { expiresIn: '10m' });
 
   const scopes = [
     'instagram_business_basic',
@@ -107,15 +122,17 @@ export async function instagramDirectOAuthCallback(
   }
 
   let userId: string;
+  let workspaceId: string | null;
   try {
-    const payload = req.server.jwt.verify<{ userId: string }>(state);
-    userId = payload.userId;
+    const payload = req.server.jwt.verify<{ userId: string; workspaceId?: string | null }>(state);
+    userId      = payload.userId;
+    workspaceId = payload.workspaceId ?? null;
   } catch {
     return reply.redirect(`${frontendUrl}/platforms?error=${encodeURIComponent('Invalid OAuth state')}`);
   }
 
   try {
-    await platformsService.handleInstagramDirectCallback(userId, code);
+    await platformsService.handleInstagramDirectCallback(userId, code, workspaceId);
     reply.redirect(`${frontendUrl}/platforms?connected=success`);
   } catch (err) {
     const msg = (err as Error).message ?? 'Failed to connect Instagram account';
@@ -139,15 +156,17 @@ export async function facebookOAuthCallback(
 
   // Verify state JWT (signed by our server, carries userId for CSRF protection)
   let userId: string;
+  let workspaceId: string | null;
   try {
-    const payload = req.server.jwt.verify<{ userId: string }>(state);
-    userId = payload.userId;
+    const payload = req.server.jwt.verify<{ userId: string; workspaceId?: string | null }>(state);
+    userId      = payload.userId;
+    workspaceId = payload.workspaceId ?? null;
   } catch {
     return reply.redirect(`${frontendUrl}/platforms?error=${encodeURIComponent('Invalid OAuth state')}`);
   }
 
   try {
-    await platformsService.handleFacebookCallback(userId, code, granted_scopes);
+    await platformsService.handleFacebookCallback(userId, code, granted_scopes, workspaceId);
     reply.redirect(`${frontendUrl}/platforms?connected=success`);
   } catch (err) {
     const msg = (err as Error).message ?? 'Failed to connect account';

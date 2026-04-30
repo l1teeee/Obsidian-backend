@@ -12,9 +12,12 @@ import {
 const API_LIMIT      = { max: 30, timeWindow: '1 minute' };
 const CALLBACK_LIMIT = { max: 10, timeWindow: '1 minute' };
 
+type WsQuery    = { Querystring: { workspaceId?: string } };
+type CallbackQs = { Querystring: { code?: string; state?: string; error?: string; error_description?: string } };
+type FbCallbackQs = { Querystring: { code?: string; state?: string; error?: string; error_description?: string; granted_scopes?: string } };
+
 export default async function platformsRoutes(fastify: FastifyInstance) {
-  // All routes below require authentication except the callbacks (verified via state JWT)
-  fastify.get(
+  fastify.get<WsQuery>(
     '/',
     { onRequest: [fastify.authenticate], config: { rateLimit: API_LIMIT } },
     getConnections,
@@ -26,35 +29,31 @@ export default async function platformsRoutes(fastify: FastifyInstance) {
     disconnect,
   );
 
-  // Connect Instagram from existing FB page tokens (no new OAuth required)
-  fastify.get(
+  fastify.get<WsQuery>(
     '/connect/instagram',
     { onRequest: [fastify.authenticate], config: { rateLimit: API_LIMIT } },
     connectInstagramFromPages,
   );
 
-  // Initiates Facebook OAuth → redirects user to Facebook
-  fastify.get(
+  fastify.get<WsQuery>(
     '/connect/facebook',
     { onRequest: [fastify.authenticate], config: { rateLimit: API_LIMIT } },
     initFacebookOAuth,
   );
 
-  // Facebook calls this back after user grants permission (no auth header here)
-  fastify.get<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>(
+  fastify.get<FbCallbackQs>(
     '/connect/facebook/callback',
     { config: { rateLimit: CALLBACK_LIMIT } },
     facebookOAuthCallback,
   );
 
-  // Instagram direct OAuth (Camino B — no Facebook required)
-  fastify.get(
+  fastify.get<WsQuery>(
     '/connect/instagram/oauth',
     { onRequest: [fastify.authenticate], config: { rateLimit: API_LIMIT } },
     initInstagramDirectOAuth,
   );
 
-  fastify.get<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>(
+  fastify.get<CallbackQs>(
     '/connect/instagram/oauth/callback',
     { config: { rateLimit: CALLBACK_LIMIT } },
     instagramDirectOAuthCallback,

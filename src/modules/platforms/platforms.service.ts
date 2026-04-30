@@ -156,14 +156,14 @@ async function resolveIgAccountId(
   return null;
 }
 
-export async function linkInstagramFromExistingPages(userId: string): Promise<number> {
-  // Fetch ALL active FB rows — including those without ig_business_id (NPE pages)
+export async function linkInstagramFromExistingPages(userId: string, workspaceId?: string | null): Promise<number> {
   const [rows] = await pool.query<SocialConnectionRow[]>(
     `SELECT id, user_id, platform, platform_account_id, account_name, account_picture,
             access_token, token_expires_at, page_id, page_name, ig_business_id, scopes
      FROM social_connections
-     WHERE user_id = ? AND platform = 'facebook' AND is_active = 1`,
-    [userId],
+     WHERE user_id = ? AND platform = 'facebook' AND is_active = 1
+       AND (workspace_id = ? OR ? IS NULL)`,
+    [userId, workspaceId ?? null, workspaceId ?? null],
   );
 
   if (rows.length === 0) return 0;
@@ -208,9 +208,9 @@ export async function linkInstagramFromExistingPages(userId: string): Promise<nu
       const igId = uid();
       await dbConn.query(
         `INSERT INTO social_connections
-           (id, user_id, platform, platform_account_id, account_name, account_picture,
+           (id, user_id, workspace_id, platform, platform_account_id, account_name, account_picture,
             access_token, token_expires_at, page_id, page_name, ig_business_id, account_type, scopes)
-         VALUES (?, ?, 'instagram', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, 'instagram', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            account_name     = VALUES(account_name),
            account_picture  = VALUES(account_picture),
@@ -224,7 +224,7 @@ export async function linkInstagramFromExistingPages(userId: string): Promise<nu
            scopes           = VALUES(scopes),
            updated_at       = CURRENT_TIMESTAMP`,
         [
-          igId, userId, igAccountId, igName, igPicture,
+          igId, userId, workspaceId ?? null, igAccountId, igName, igPicture,
           encryptToken(pageToken), null,
           fbConn.page_id, fbConn.page_name, igAccountId, accountType,
           'instagram_basic,instagram_content_publish',
@@ -255,7 +255,7 @@ export async function linkInstagramFromExistingPages(userId: string): Promise<nu
  *
  * Uses the same Facebook App ID/Secret (add the Instagram product to the Meta app).
  */
-export async function handleInstagramDirectCallback(userId: string, code: string): Promise<void> {
+export async function handleInstagramDirectCallback(userId: string, code: string, workspaceId?: string | null): Promise<void> {
   // 1. Exchange code for short-lived token
   const shortRes = await fetch('https://api.instagram.com/oauth/access_token', {
     method:  'POST',
@@ -319,9 +319,9 @@ export async function handleInstagramDirectCallback(userId: string, code: string
   const id = uid();
   await pool.query(
     `INSERT INTO social_connections
-       (id, user_id, platform, platform_account_id, account_name, account_picture,
+       (id, user_id, workspace_id, platform, platform_account_id, account_name, account_picture,
         access_token, token_expires_at, page_id, page_name, ig_business_id, account_type, scopes)
-     VALUES (?, ?, 'instagram', ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+     VALUES (?, ?, ?, 'instagram', ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        account_name     = VALUES(account_name),
        account_picture  = VALUES(account_picture),
@@ -332,7 +332,7 @@ export async function handleInstagramDirectCallback(userId: string, code: string
        scopes           = VALUES(scopes),
        updated_at       = CURRENT_TIMESTAMP`,
     [
-      id, userId,
+      id, userId, workspaceId ?? null,
       me.id,
       me.username ?? me.name ?? 'Instagram',
       me.profile_picture_url ?? null,
@@ -358,14 +358,16 @@ export async function handleInstagramDirectCallback(userId: string, code: string
   }
 }
 
-export async function listConnections(userId: string): Promise<SocialConnection[]> {
+export async function listConnections(userId: string, workspaceId?: string | null): Promise<SocialConnection[]> {
   const [rows] = await pool.query<SocialConnectionRow[]>(
     `SELECT id, user_id, platform, platform_account_id, account_name, account_picture,
             token_expires_at, page_id, page_name, ig_business_id, account_type, scopes, created_at, updated_at
-     FROM social_connections WHERE user_id = ? AND is_active = 1 ORDER BY created_at ASC`,
-    [userId],
+     FROM social_connections
+     WHERE user_id = ? AND is_active = 1
+       AND (workspace_id = ? OR (? IS NULL AND workspace_id IS NULL))
+     ORDER BY created_at ASC`,
+    [userId, workspaceId ?? null, workspaceId ?? null],
   );
-  // Don't expose access_token in list
   return rows;
 }
 
@@ -392,7 +394,7 @@ export async function deleteConnection(id: string, userId: string): Promise<void
  * 3. Fetch user profile + pages (+ IG accounts linked to pages)
  * 4. Upsert one row per FB page (platform=facebook) and one per IG account (platform=instagram)
  */
-export async function handleFacebookCallback(userId: string, code: string, grantedScopes?: string): Promise<void> {
+export async function handleFacebookCallback(userId: string, code: string, grantedScopes?: string, workspaceId?: string | null): Promise<void> {
   // 1. Short-lived token
   const shortToken = await exchangeCodeForToken(code);
 
@@ -470,9 +472,9 @@ export async function handleFacebookCallback(userId: string, code: string, grant
         const fbId = uid();
         await dbConn.query(
           `INSERT INTO social_connections
-             (id, user_id, platform, platform_account_id, account_name, account_picture,
+             (id, user_id, workspace_id, platform, platform_account_id, account_name, account_picture,
               access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
-           VALUES (?, ?, 'facebook', ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
+           VALUES (?, ?, ?, 'facebook', ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
            ON DUPLICATE KEY UPDATE
              account_name     = VALUES(account_name),
              account_picture  = VALUES(account_picture),
@@ -481,7 +483,7 @@ export async function handleFacebookCallback(userId: string, code: string, grant
              is_active        = 1,
              scopes           = VALUES(scopes),
              updated_at       = CURRENT_TIMESTAMP`,
-          [fbId, userId, me.id, me.name, me.picture?.data?.url ?? null, encryptToken(userToken), expiresAt, 'public_profile,email'],
+          [fbId, userId, workspaceId ?? null, me.id, me.name, me.picture?.data?.url ?? null, encryptToken(userToken), expiresAt, 'public_profile,email'],
         );
       }
     }
@@ -495,9 +497,9 @@ export async function handleFacebookCallback(userId: string, code: string, grant
 
       await dbConn.query(
         `INSERT INTO social_connections
-           (id, user_id, platform, platform_account_id, account_name, account_picture,
+           (id, user_id, workspace_id, platform, platform_account_id, account_name, account_picture,
             access_token, user_access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
-         VALUES (?, ?, 'facebook', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, 'facebook', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            account_name       = VALUES(account_name),
            account_picture    = VALUES(account_picture),
@@ -511,7 +513,7 @@ export async function handleFacebookCallback(userId: string, code: string, grant
            scopes             = VALUES(scopes),
            updated_at         = CURRENT_TIMESTAMP`,
         [
-          fbId, userId, me.id, me.name, me.picture?.data?.url ?? null,
+          fbId, userId, workspaceId ?? null, me.id, me.name, me.picture?.data?.url ?? null,
           encryptToken(page.access_token), encryptToken(userToken), null,
           page.id, page.name, igAccountId,
           actualScopes,
@@ -541,9 +543,9 @@ export async function handleFacebookCallback(userId: string, code: string, grant
 
         await dbConn.query(
           `INSERT INTO social_connections
-             (id, user_id, platform, platform_account_id, account_name, account_picture,
+             (id, user_id, workspace_id, platform, platform_account_id, account_name, account_picture,
               access_token, token_expires_at, page_id, page_name, ig_business_id, account_type, scopes)
-           VALUES (?, ?, 'instagram', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           VALUES (?, ?, ?, 'instagram', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              account_name     = VALUES(account_name),
              account_picture  = VALUES(account_picture),
@@ -556,7 +558,7 @@ export async function handleFacebookCallback(userId: string, code: string, grant
              scopes           = VALUES(scopes),
              updated_at       = CURRENT_TIMESTAMP`,
           [
-            igId, userId, igAccountId, igName, igPicture,
+            igId, userId, workspaceId ?? null, igAccountId, igName, igPicture,
             encryptToken(page.access_token), null,
             page.id, page.name, igAccountId, igAccType,
             'instagram_basic,instagram_content_publish',
@@ -584,9 +586,9 @@ export async function handleFacebookCallback(userId: string, code: string, grant
         const igId = uid();
         await dbConn.query(
           `INSERT INTO social_connections
-             (id, user_id, platform, platform_account_id, account_name, account_picture,
+             (id, user_id, workspace_id, platform, platform_account_id, account_name, account_picture,
               access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
-           VALUES (?, ?, 'instagram', ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+           VALUES (?, ?, ?, 'instagram', ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
            ON DUPLICATE KEY UPDATE
              account_name     = VALUES(account_name),
              account_picture  = VALUES(account_picture),
@@ -596,7 +598,7 @@ export async function handleFacebookCallback(userId: string, code: string, grant
              scopes           = VALUES(scopes),
              updated_at       = CURRENT_TIMESTAMP`,
           [
-            igId, userId,
+            igId, userId, workspaceId ?? null,
             igAcct.id,
             igAcct.username ?? igAcct.name ?? 'Instagram',
             igAcct.profile_picture_url ?? null,
