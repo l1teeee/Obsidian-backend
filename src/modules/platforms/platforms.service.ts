@@ -417,6 +417,8 @@ export async function handleFacebookCallback(userId: string, code: string, grant
     fields: 'id,name,access_token,instagram_business_account,connected_instagram_account',
   });
 
+  console.log('[FB OAuth] pages returned:', pagesResp.data.length, JSON.stringify(pagesResp.data.map(p => ({ id: p.id, name: p.name }))));
+
   const dbConn = await pool.getConnection();
   try {
     await dbConn.beginTransaction();
