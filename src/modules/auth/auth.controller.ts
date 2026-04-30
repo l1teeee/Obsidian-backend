@@ -1,4 +1,5 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
+import jwt from 'jsonwebtoken';
 import * as authService from './auth.service';
 import { env } from '../../config/env';
 
@@ -186,6 +187,17 @@ export async function logoutHandler(
   const refreshToken = request.cookies?.[RT_NAME];
   if (refreshToken) {
     await authService.logoutByRefreshToken(refreshToken);
+  } else {
+    // Fallback: use the access token from Authorization header.
+    // Decoded without signature verification — we only need the userId to revoke tokens.
+    // Used when the httpOnly cookie is not sent (e.g. keepalive fetch during page unload).
+    const authHeader = request.headers.authorization;
+    if (authHeader?.startsWith('Bearer ')) {
+      try {
+        const payload = jwt.decode(authHeader.slice(7)) as { id?: string } | null;
+        if (payload?.id) await authService.logout(payload.id);
+      } catch { /* ignore */ }
+    }
   }
   clearSessionCookies(reply);
   reply.send({ success: true, data: null });
