@@ -1,7 +1,7 @@
 import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { pool }           from '../../config/db';
 import { uid }            from '../../lib/uid';
-import { decryptToken }   from '../../lib/crypto';
+import { decryptToken, encryptToken } from '../../lib/crypto';
 import { S3_PUBLIC_URL }  from '../../lib/s3';
 import { promoteToPost, deleteS3Objects } from '../media/media.service';
 import { sendPostCreatedEmail } from '../../lib/email';
@@ -41,11 +41,16 @@ async function getFbConnection(userId: string, pageId?: string | null): Promise<
   const conn = rows[0];
   conn.access_token = decryptToken(conn.access_token);
 
-  // If the stored token is a User Token (has expiry), exchange it for a Page Access Token.
-  // Page Tokens don't expire and have the permissions needed to post on behalf of the page.
-  if (conn.token_expires_at !== null) {
+  // Use user_access_token (long-lived user token) to obtain a fresh page token before publishing.
+  // This ensures the page token always reflects the latest granted permissions.
+  // Fall back to access_token as the exchange source only if it is itself a user token (has expiry).
+  const userToken = conn.user_access_token
+    ? decryptToken(conn.user_access_token)
+    : conn.token_expires_at !== null ? conn.access_token : null;
+
+  if (userToken && conn.page_id) {
     try {
-      const url = `https://graph.facebook.com/v21.0/${conn.page_id}?fields=access_token&access_token=${encodeURIComponent(conn.access_token)}`;
+      const url = `https://graph.facebook.com/v21.0/${conn.page_id}?fields=access_token&access_token=${encodeURIComponent(userToken)}`;
       const res  = await fetch(url);
       if (res.ok) {
         const data = await res.json() as { access_token?: string };
@@ -53,13 +58,13 @@ async function getFbConnection(userId: string, pageId?: string | null): Promise<
           await pool.query(
             `UPDATE social_connections SET access_token = ?, token_expires_at = NULL
              WHERE user_id = ? AND platform = 'facebook' AND page_id = ? AND is_active = 1`,
-            [data.access_token, userId, conn.page_id],
+            [encryptToken(data.access_token), userId, conn.page_id],
           );
-          conn.access_token    = data.access_token;
+          conn.access_token     = data.access_token;
           conn.token_expires_at = null;
         }
       }
-    } catch { /* if exchange fails, attempt publish with user token — FB will reject if insufficient */ }
+    } catch { /* use stored access_token as fallback */ }
   }
 
   return conn;
