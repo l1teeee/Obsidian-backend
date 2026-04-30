@@ -1,6 +1,7 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
 import jwt from 'jsonwebtoken';
 import * as authService from './auth.service';
+import { pool } from '../../config/db';
 import { env } from '../../config/env';
 
 type VerifyEmailBody  = { email: string; code: string };
@@ -189,13 +190,19 @@ export async function logoutHandler(
     await authService.logoutByRefreshToken(refreshToken);
   } else {
     // Fallback: use the access token from Authorization header.
-    // Decoded without signature verification — we only need the userId to revoke tokens.
-    // Used when the httpOnly cookie is not sent (e.g. keepalive fetch during page unload).
+    // Decoded without signature verification — only needs userId + iat.
+    // Revokes only the refresh token(s) that were active when this access token was issued,
+    // so concurrent sessions opened in other tabs are not affected.
     const authHeader = request.headers.authorization;
     if (authHeader?.startsWith('Bearer ')) {
       try {
-        const payload = jwt.decode(authHeader.slice(7)) as { id?: string } | null;
-        if (payload?.id) await authService.logout(payload.id);
+        const payload = jwt.decode(authHeader.slice(7)) as { id?: string; iat?: number } | null;
+        if (payload?.id && payload?.iat) {
+          await pool.query(
+            'UPDATE refresh_tokens SET is_active = 0 WHERE user_id = ? AND UNIX_TIMESTAMP(created_at) <= ?',
+            [payload.id, payload.iat + 60],
+          );
+        }
       } catch { /* ignore */ }
     }
   }

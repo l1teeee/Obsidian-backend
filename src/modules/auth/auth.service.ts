@@ -10,6 +10,13 @@ import { sendLoginNotification, sendVerificationEmail, sendPasswordResetEmail } 
 
 const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET);
 
+// Sessions allowed per plan when max_sessions is not explicitly set
+const PLAN_SESSION_LIMITS: Record<string, number> = {
+  starter:    2,
+  pro:        5,
+  enterprise: 10,
+};
+
 interface UserRow extends RowDataPacket {
   id:                           string;
   email:                        string;
@@ -19,7 +26,8 @@ interface UserRow extends RowDataPacket {
   profile_completed:            number;
   email_verified:               number;
   email_verification_token:     string | null;
-  max_sessions:                 number;
+  plan:                         string | null;
+  max_sessions:                 number | null;
   sessions_invalidated_at:      Date | null;
   is_active:                    number;
   is_banned:                    number;
@@ -76,7 +84,7 @@ function signTokens(userId: string, email: string, profileCompleted: boolean): O
     env.JWT_SECRET,
     { algorithm: 'HS256', expiresIn: '15m' },
   );
-  const refreshToken = jwt.sign({ id: userId }, env.JWT_REFRESH_SECRET, {
+  const refreshToken = jwt.sign({ id: userId, jti: crypto.randomUUID() }, env.JWT_REFRESH_SECRET, {
     algorithm: 'HS256',
     expiresIn: '7d',
   });
@@ -175,7 +183,7 @@ export async function login(
   force = false,
 ): Promise<TokenPair | SessionConflict> {
   const [rows] = await pool.query<UserRow[]>(
-    'SELECT id, email, password_hash, name, first_login, profile_completed, email_verified, max_sessions, is_active, is_banned FROM users WHERE email = ? LIMIT 1',
+    'SELECT id, email, password_hash, name, first_login, profile_completed, email_verified, plan, max_sessions, is_active, is_banned FROM users WHERE email = ? LIMIT 1',
     [email],
   );
 
@@ -198,7 +206,8 @@ export async function login(
     return { ...tokens, isFirstLogin: Boolean(user.first_login), profileCompleted };
   }
 
-  const maxSessions = user.max_sessions ?? 1;
+  // max_sessions overrides the plan default when explicitly set
+  const maxSessions = user.max_sessions ?? PLAN_SESSION_LIMITS[user.plan ?? ''] ?? 1;
 
   // Check active session count
   const [activeSessions] = await pool.query<RefreshTokenRow[]>(
@@ -287,17 +296,9 @@ export async function logout(userId: string): Promise<void> {
 }
 
 export async function logoutByRefreshToken(refreshToken: string): Promise<void> {
-  // Decode without verifying expiry — we just need the userId to close the session
-  let userId: string | undefined;
-  try {
-    const payload = jwt.decode(refreshToken) as { id?: string } | null;
-    userId = payload?.id;
-  } catch {
-    return;
-  }
-  if (!userId) return;
-  await pool.query('UPDATE refresh_tokens SET is_active = 0 WHERE user_id = ?', [userId]);
-  await pool.query('UPDATE users SET is_active = 0, sessions_invalidated_at = NOW() WHERE id = ?', [userId]);
+  // Revoke only this specific token — not all sessions.
+  // Using the token value directly avoids killing sessions opened in other tabs.
+  await pool.query('UPDATE refresh_tokens SET is_active = 0 WHERE token = ?', [refreshToken]);
 }
 
 export async function getSessions(userId: string): Promise<ActiveSession[]> {
