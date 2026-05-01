@@ -412,11 +412,25 @@ export async function handleFacebookCallback(userId: string, code: string, grant
     fields: 'id,name,picture.type(large)',
   });
 
-  // 4. Pages (+ instagram_business_account + connected_instagram_account for Creator/personal profiles)
-  const pagesResp = await fbGet<FbPagesResponse>('/me/accounts', userToken, {
-    fields: 'id,name,access_token,instagram_business_account,connected_instagram_account',
-    limit:  '100',
-  });
+  // 4. Pages — try both /me/accounts and the raw URL to diagnose NPE vs classic pages
+  const rawAccountsUrl = new URL('https://graph.facebook.com/v21.0/me/accounts');
+  rawAccountsUrl.searchParams.set('access_token', userToken);
+  rawAccountsUrl.searchParams.set('fields', 'id,name,access_token,instagram_business_account,connected_instagram_account');
+  rawAccountsUrl.searchParams.set('limit', '100');
+  const rawAccountsRes  = await fetch(rawAccountsUrl.toString());
+  const rawAccountsBody = await rawAccountsRes.json() as Record<string, unknown>;
+  console.log('[FB_CALLBACK] /me/accounts raw response:', JSON.stringify(rawAccountsBody));
+
+  // Also try fetching user's profile pages (works for some NPE pages)
+  const rawMeUrl = new URL('https://graph.facebook.com/v21.0/me');
+  rawMeUrl.searchParams.set('access_token', userToken);
+  rawMeUrl.searchParams.set('fields', 'id,name,accounts{id,name,access_token}');
+  const rawMeRes  = await fetch(rawMeUrl.toString());
+  const rawMeBody = await rawMeRes.json() as Record<string, unknown>;
+  console.log('[FB_CALLBACK] /me?fields=accounts raw response:', JSON.stringify(rawMeBody));
+
+  const pagesResp = rawAccountsBody as unknown as FbPagesResponse;
+  if (!Array.isArray(pagesResp.data)) pagesResp.data = [];
 
   console.log('[FB_CALLBACK] grantedScopes:', grantedScopes);
   console.log('[FB_CALLBACK] pagesResp.data.length:', pagesResp.data.length);
