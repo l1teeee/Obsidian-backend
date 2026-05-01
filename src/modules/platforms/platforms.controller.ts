@@ -73,6 +73,8 @@ export async function initFacebookOAuth(
   authUrl.searchParams.set('scope',         scopes);
   authUrl.searchParams.set('state',         state);
   authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('auth_type',     'reauthorize');
+  authUrl.searchParams.set('auth_nonce',    String(Date.now()));
   authUrl.searchParams.set('return_scopes', 'true');
 
   reply.send({ success: true, data: { url: authUrl.toString() } });

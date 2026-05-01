@@ -418,6 +418,10 @@ export async function handleFacebookCallback(userId: string, code: string, grant
     limit:  '100',
   });
 
+  console.log('[FB_CALLBACK] grantedScopes:', grantedScopes);
+  console.log('[FB_CALLBACK] pagesResp.data.length:', pagesResp.data.length);
+  console.log('[FB_CALLBACK] pages:', JSON.stringify(pagesResp.data.map(p => ({ id: p.id, name: p.name, hasToken: !!p.access_token }))));
+
   const dbConn = await pool.getConnection();
   try {
     await dbConn.beginTransaction();
