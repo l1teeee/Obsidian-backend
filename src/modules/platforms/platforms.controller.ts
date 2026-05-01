@@ -166,10 +166,29 @@ export async function facebookOAuthCallback(
   }
 
   try {
-    await platformsService.handleFacebookCallback(userId, code, granted_scopes, workspaceId);
-    reply.redirect(`${frontendUrl}/platforms?connected=success`);
+    const { needsPageSelection } = await platformsService.handleFacebookCallback(userId, code, granted_scopes, workspaceId);
+    const param = needsPageSelection ? 'needs_page' : 'success';
+    reply.redirect(`${frontendUrl}/platforms?connected=${param}`);
   } catch (err) {
     const msg = (err as Error).message ?? 'Failed to connect account';
     reply.redirect(`${frontendUrl}/platforms?error=${encodeURIComponent(msg)}`);
   }
+}
+
+// ─── Select Facebook Page (manual fallback for NPE pages) ─────────────────────
+
+export async function selectFacebookPage(
+  req: FastifyRequest<{ Body: { pageId: string }; Querystring: { workspaceId?: string } }>,
+  reply: FastifyReply,
+) {
+  const userId     = (req.user as { id: string }).id;
+  const workspaceId = req.query.workspaceId ?? null;
+  const { pageId } = req.body as { pageId?: string };
+
+  if (!pageId) {
+    return reply.code(400).send({ success: false, error: { code: 'MISSING_PAGE_ID', message: 'pageId is required' } });
+  }
+
+  await platformsService.selectFacebookPage(userId, pageId.trim(), workspaceId);
+  reply.send({ success: true });
 }

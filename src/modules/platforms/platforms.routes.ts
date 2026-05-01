@@ -7,6 +7,7 @@ import {
   facebookOAuthCallback,
   initInstagramDirectOAuth,
   instagramDirectOAuthCallback,
+  selectFacebookPage,
 } from './platforms.controller';
 
 const API_LIMIT      = { max: 30, timeWindow: '1 minute' };
@@ -57,5 +58,11 @@ export default async function platformsRoutes(fastify: FastifyInstance) {
     '/connect/instagram/oauth/callback',
     { config: { rateLimit: CALLBACK_LIMIT } },
     instagramDirectOAuthCallback,
+  );
+
+  fastify.post<WsQuery & { Body: { pageId: string } }>(
+    '/connect/facebook/select-page',
+    { onRequest: [fastify.authenticate], config: { rateLimit: API_LIMIT } },
+    selectFacebookPage,
   );
 }

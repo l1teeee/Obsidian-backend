@@ -394,7 +394,112 @@ export async function deleteConnection(id: string, userId: string): Promise<void
  * 3. Fetch user profile + pages (+ IG accounts linked to pages)
  * 4. Upsert one row per FB page (platform=facebook) and one per IG account (platform=instagram)
  */
-export async function handleFacebookCallback(userId: string, code: string, grantedScopes?: string, workspaceId?: string | null): Promise<void> {
+export async function selectFacebookPage(userId: string, pageId: string, workspaceId?: string | null): Promise<void> {
+  type PendingRow = SocialConnectionRow & { user_access_token?: string | null };
+
+  const [rows] = await pool.query<PendingRow[]>(
+    `SELECT * FROM social_connections
+     WHERE user_id = ? AND platform = 'facebook' AND page_id IS NULL AND is_active = 1
+       AND (workspace_id = ? OR (? IS NULL AND workspace_id IS NULL))
+     ORDER BY updated_at DESC LIMIT 1`,
+    [userId, workspaceId ?? null, workspaceId ?? null],
+  );
+
+  if (rows.length === 0) {
+    const err = new Error('No pending Facebook connection found') as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const conn      = rows[0];
+  const userToken = conn.user_access_token
+    ? decryptToken(conn.user_access_token)
+    : decryptToken(conn.access_token);
+
+  type PageWithPicture = FbPage & { picture?: { data: { url: string } } };
+  let page: PageWithPicture;
+  try {
+    page = await fbGet<PageWithPicture>(
+      `/${pageId}`, userToken,
+      { fields: 'id,name,access_token,instagram_business_account,connected_instagram_account,picture{url}' },
+    );
+  } catch {
+    throw new Error('Page not found or you do not have admin access. Check the Page ID and try again.');
+  }
+
+  if (!page.access_token) {
+    throw new Error('Could not get page access token. Make sure you are an admin of this page.');
+  }
+
+  const igAccountId = page.instagram_business_account?.id ?? page.connected_instagram_account?.id ?? null;
+
+  const dbConn = await pool.getConnection();
+  try {
+    await dbConn.beginTransaction();
+
+    await dbConn.query(
+      `UPDATE social_connections
+       SET page_id = ?, page_name = ?, access_token = ?, user_access_token = ?,
+           token_expires_at = NULL, ig_business_id = ?,
+           account_picture = COALESCE(?, account_picture), updated_at = NOW()
+       WHERE id = ?`,
+      [page.id, page.name, encryptToken(page.access_token), encryptToken(userToken),
+       igAccountId, page.picture?.data?.url ?? null, conn.id],
+    );
+
+    if (igAccountId) {
+      let igName    = page.name;
+      let igPicture = page.picture?.data?.url ?? null;
+      let igAccType: string | null = null;
+      try {
+        const igInfo = await fbGet<{ username?: string; name?: string; profile_picture_url?: string; account_type?: string }>(
+          `/${igAccountId}`, page.access_token,
+          { fields: 'username,name,profile_picture_url,account_type' },
+        );
+        igName    = igInfo.username ?? igInfo.name ?? page.name;
+        igPicture = igInfo.profile_picture_url ?? igPicture;
+        igAccType = igInfo.account_type ?? null;
+      } catch { /* use fallbacks */ }
+
+      const igId = uid();
+      await dbConn.query(
+        `INSERT INTO social_connections
+           (id, user_id, workspace_id, platform, platform_account_id, account_name, account_picture,
+            access_token, token_expires_at, page_id, page_name, ig_business_id, account_type, scopes)
+         VALUES (?, ?, ?, 'instagram', ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           account_name    = VALUES(account_name),
+           account_picture = VALUES(account_picture),
+           access_token    = VALUES(access_token),
+           page_id         = VALUES(page_id),
+           page_name       = VALUES(page_name),
+           account_type    = VALUES(account_type),
+           is_active       = 1,
+           scopes          = VALUES(scopes),
+           updated_at      = CURRENT_TIMESTAMP`,
+        [
+          igId, userId, workspaceId ?? null, igAccountId, igName, igPicture,
+          encryptToken(page.access_token),
+          page.id, page.name, igAccountId, igAccType,
+          'instagram_basic,instagram_content_publish',
+        ],
+      );
+    }
+
+    await dbConn.commit();
+  } catch (err) {
+    await dbConn.rollback();
+    throw err;
+  } finally {
+    dbConn.release();
+  }
+
+  cache.deleteByPrefix(`fb:summary:${userId}`);
+  cache.deleteByPrefix(`fb:posts:${userId}`);
+  cache.delete(`dashboard:summary:${userId}`);
+}
+
+export async function handleFacebookCallback(userId: string, code: string, grantedScopes?: string, workspaceId?: string | null): Promise<{ needsPageSelection: boolean }> {
   // 1. Short-lived token
   const shortToken = await exchangeCodeForToken(code);
 
@@ -412,37 +517,20 @@ export async function handleFacebookCallback(userId: string, code: string, grant
     fields: 'id,name,picture.type(large)',
   });
 
-  // 4. Pages — try both /me/accounts and the raw URL to diagnose NPE vs classic pages
-  const rawAccountsUrl = new URL('https://graph.facebook.com/v21.0/me/accounts');
-  rawAccountsUrl.searchParams.set('access_token', userToken);
-  rawAccountsUrl.searchParams.set('fields', 'id,name,access_token,instagram_business_account,connected_instagram_account');
-  rawAccountsUrl.searchParams.set('limit', '100');
-  const rawAccountsRes  = await fetch(rawAccountsUrl.toString());
-  const rawAccountsBody = await rawAccountsRes.json() as Record<string, unknown>;
-  console.log('[FB_CALLBACK] /me/accounts raw response:', JSON.stringify(rawAccountsBody));
-
-  // Also try fetching user's profile pages (works for some NPE pages)
-  const rawMeUrl = new URL('https://graph.facebook.com/v21.0/me');
-  rawMeUrl.searchParams.set('access_token', userToken);
-  rawMeUrl.searchParams.set('fields', 'id,name,accounts{id,name,access_token}');
-  const rawMeRes  = await fetch(rawMeUrl.toString());
-  const rawMeBody = await rawMeRes.json() as Record<string, unknown>;
-  console.log('[FB_CALLBACK] /me?fields=accounts raw response:', JSON.stringify(rawMeBody));
-
-  const pagesResp = rawAccountsBody as unknown as FbPagesResponse;
+  // 4. Pages
+  const pagesResp = await fbGet<FbPagesResponse>('/me/accounts', userToken, {
+    fields: 'id,name,access_token,instagram_business_account,connected_instagram_account',
+    limit:  '100',
+  }).catch(() => ({ data: [] as FbPage[] }));
   if (!Array.isArray(pagesResp.data)) pagesResp.data = [];
 
-  console.log('[FB_CALLBACK] grantedScopes:', grantedScopes);
-  console.log('[FB_CALLBACK] pagesResp.data.length:', pagesResp.data.length);
-  console.log('[FB_CALLBACK] pages:', JSON.stringify(pagesResp.data.map(p => ({ id: p.id, name: p.name, hasToken: !!p.access_token }))));
+  let needsPageSelection = false;
 
   const dbConn = await pool.getConnection();
   try {
     await dbConn.beginTransaction();
 
     if (pagesResp.data.length === 0) {
-      // No Facebook Pages returned — check if user had a previously disconnected row
-      // with page_id set (e.g. Facebook API glitch on reconnect) and reactivate it.
       const [existing] = await dbConn.query<SocialConnectionRow[]>(
         `SELECT id FROM social_connections
          WHERE user_id = ? AND platform = 'facebook' AND platform_account_id = ?
@@ -452,16 +540,14 @@ export async function handleFacebookCallback(userId: string, code: string, grant
       );
 
       if (existing.length > 0) {
-        // /me/accounts returned empty but we have a previously saved page_id.
-        // Fetch the Page Access Token directly from the Graph API using the page_id —
-        // this works even for NPE pages that don't appear in /me/accounts.
+        // Reactivate existing page row — fetch page token directly (works for NPE pages)
         const [existingRow] = await dbConn.query<SocialConnectionRow[]>(
           `SELECT page_id FROM social_connections WHERE id = ?`,
           [existing[0].id],
         );
         const pageId    = existingRow[0]?.page_id;
-        let   pageToken = userToken;          // fallback to user token if exchange fails
-        let   pageExpiry: Date | null = expiresAt; // user token expiry as fallback
+        let   pageToken = userToken;
+        let   pageExpiry: Date | null = expiresAt;
 
         if (pageId) {
           try {
@@ -473,7 +559,7 @@ export async function handleFacebookCallback(userId: string, code: string, grant
               const ptData = await ptRes.json() as { access_token?: string };
               if (ptData.access_token) {
                 pageToken  = ptData.access_token;
-                pageExpiry = null; // Page Tokens don't expire
+                pageExpiry = null;
               }
             }
           } catch { /* use userToken fallback */ }
@@ -487,23 +573,27 @@ export async function handleFacebookCallback(userId: string, code: string, grant
           [encryptToken(pageToken), encryptToken(userToken), pageExpiry, me.name, me.picture?.data?.url ?? null, existing[0].id],
         );
       } else {
-        // Truly no pages — save personal FB profile as fallback
+        // No pages found and no previous page row — save pending connection.
+        // User will be asked to enter their Page ID manually on the frontend.
         const fbId = uid();
         await dbConn.query(
           `INSERT INTO social_connections
              (id, user_id, workspace_id, platform, platform_account_id, account_name, account_picture,
-              access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
-           VALUES (?, ?, ?, 'facebook', ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
+              access_token, user_access_token, token_expires_at, page_id, page_name, ig_business_id, scopes)
+           VALUES (?, ?, ?, 'facebook', ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
            ON DUPLICATE KEY UPDATE
-             account_name     = VALUES(account_name),
-             account_picture  = VALUES(account_picture),
-             access_token     = VALUES(access_token),
-             token_expires_at = VALUES(token_expires_at),
-             is_active        = 1,
-             scopes           = VALUES(scopes),
-             updated_at       = CURRENT_TIMESTAMP`,
-          [fbId, userId, workspaceId ?? null, me.id, me.name, me.picture?.data?.url ?? null, encryptToken(userToken), expiresAt, 'public_profile,email'],
+             account_name      = VALUES(account_name),
+             account_picture   = VALUES(account_picture),
+             access_token      = VALUES(access_token),
+             user_access_token = VALUES(user_access_token),
+             token_expires_at  = VALUES(token_expires_at),
+             is_active         = 1,
+             scopes            = VALUES(scopes),
+             updated_at        = CURRENT_TIMESTAMP`,
+          [fbId, userId, workspaceId ?? null, me.id, me.name, me.picture?.data?.url ?? null,
+           encryptToken(userToken), encryptToken(userToken), expiresAt, actualScopes],
         );
+        needsPageSelection = true;
       }
     }
 
@@ -650,4 +740,6 @@ export async function handleFacebookCallback(userId: string, code: string, grant
       accountName: me.name,
     });
   }
+
+  return { needsPageSelection };
 }
