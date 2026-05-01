@@ -37,7 +37,7 @@ export async function generateImage(options: GenerateImageOptions): Promise<Gene
       'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
     },
     body: JSON.stringify({
-      model:         'gpt-image-2',
+      model:         'gpt-image-1',
       prompt:        options.prompt,
       n:             1,
       size:          options.size ?? '1024x1024',
@@ -58,7 +58,7 @@ export async function generateImage(options: GenerateImageOptions): Promise<Gene
   const data  = await res.json() as GptImageResponse;
   const image = data.data[0];
 
-  if (!image?.b64_json) throw appError('AI_ERROR', 'Empty response from gpt-image-2', 502);
+  if (!image?.b64_json) throw appError('AI_ERROR', 'Empty response from gpt-image-1', 502);
 
   return {
     dataUrl:        `data:image/png;base64,${image.b64_json}`,
@@ -79,8 +79,8 @@ export async function editImage(options: EditImageOptions): Promise<EditImageRes
   const imageBlob = new Blob([buffer], { type: 'image/png' });
 
   const form = new FormData();
-  form.append('model',  'gpt-image-1');
-  form.append('image',  imageBlob, 'image.png');
+  form.append('model',   'gpt-image-1');
+  form.append('image[]', imageBlob, 'image.png');
   form.append('prompt', options.instruction);
   form.append('n',      '1');
   form.append('size',   '1024x1024');
