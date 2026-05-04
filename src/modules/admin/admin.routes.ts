@@ -16,6 +16,15 @@ import {
   addAdminHandler,
   removeAdminHandler,
   respondToInviteHandler,
+  getPermissionsHandler,
+  setPlanPermissionsHandler,
+  getRolesHandler,
+  createRoleHandler,
+  updateRoleHandler,
+  deleteRoleHandler,
+  getRoleUsersHandler,
+  assignUserToRoleHandler,
+  removeUserFromRoleHandler,
 } from './admin.controller';
 import { initAdminTables } from './admin.service';
 
@@ -66,12 +75,25 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch('/workspaces/:id/deactivate', { config: { rateLimit: ADMIN_LIMIT } }, deactivateWorkspaceHandler);
   fastify.patch('/workspaces/:id/activate',   { config: { rateLimit: ADMIN_LIMIT } }, activateWorkspaceHandler);
 
-  // ── Admin management: requires superadmin ───────────────────────────────────
+  // ── Admin management + roles/permissions: requires superadmin ───────────────
   fastify.register(async (superScope) => {
     superScope.addHook('preHandler', requireSuperAdmin);
     superScope.get('/admins',        { config: { rateLimit: ADMIN_LIMIT } }, getAdminsHandler);
     superScope.post('/admins',       { config: { rateLimit: ADMIN_LIMIT } }, addAdminHandler);
     superScope.delete('/admins/:id', { config: { rateLimit: ADMIN_LIMIT } }, removeAdminHandler);
+
+    // Permissions
+    superScope.get('/permissions',               { config: { rateLimit: ADMIN_LIMIT } }, getPermissionsHandler);
+    superScope.put('/permissions/:plan',         { config: { rateLimit: ADMIN_LIMIT } }, setPlanPermissionsHandler);
+
+    // Custom roles
+    superScope.get('/roles',                             { config: { rateLimit: ADMIN_LIMIT } }, getRolesHandler);
+    superScope.post('/roles',                            { config: { rateLimit: ADMIN_LIMIT } }, createRoleHandler);
+    superScope.put('/roles/:id',                         { config: { rateLimit: ADMIN_LIMIT } }, updateRoleHandler);
+    superScope.delete('/roles/:id',                      { config: { rateLimit: ADMIN_LIMIT } }, deleteRoleHandler);
+    superScope.get('/roles/:id/users',                   { config: { rateLimit: ADMIN_LIMIT } }, getRoleUsersHandler);
+    superScope.post('/roles/:id/users',                  { config: { rateLimit: ADMIN_LIMIT } }, assignUserToRoleHandler);
+    superScope.delete('/roles/:id/users/:userId',        { config: { rateLimit: ADMIN_LIMIT } }, removeUserFromRoleHandler);
   });
 };
 

@@ -9,6 +9,10 @@ type WorkspacesQuery = { page?: string; limit?: string; search?: string };
 type PostsQuery      = { page?: string; limit?: string; platform?: string; status?: string; search?: string };
 type AddAdminBody       = { email?: string; role?: string };
 type RespondInviteBody  = { token?: string; action?: string };
+type PlanPermBody    = { permissions?: string[] };
+type RoleBody        = { name?: string; description?: string; color?: string; permissions?: string[] };
+type AssignUserBody  = { user_id?: string };
+type RoleUserParams  = { id: string; userId: string };
 
 function page(v?: string)  { return Math.max(1, parseInt(v ?? '1', 10) || 1); }
 function limit(v?: string) { return Math.min(100, Math.max(1, parseInt(v ?? '50', 10) || 50)); }
@@ -143,6 +147,110 @@ export async function respondToInviteHandler(
   }
   const result = await adminService.respondToInvite(token, action);
   reply.send({ success: true, data: result });
+}
+
+// ─── Permissions & Roles ─────────────────────────────────────────────────────
+
+export async function getPermissionsHandler(
+  _req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const [planPerms, systemPerms] = await Promise.all([
+    adminService.getPlanPermissions(),
+    Promise.resolve(adminService.SYSTEM_PERMISSIONS),
+  ]);
+  reply.send({ success: true, data: { system: systemPerms, plan: planPerms } });
+}
+
+export async function setPlanPermissionsHandler(
+  request: FastifyRequest<{ Params: { plan: string }; Body: PlanPermBody }>,
+  reply: FastifyReply,
+): Promise<void> {
+  const { plan } = request.params;
+  if (!['starter', 'pro', 'enterprise'].includes(plan)) {
+    reply.code(400).send({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid plan' } });
+    return;
+  }
+  const permissions = Array.isArray(request.body?.permissions) ? request.body.permissions : [];
+  await adminService.setPlanPermissions(plan, permissions);
+  reply.send({ success: true, data: null });
+}
+
+export async function getRolesHandler(
+  _req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const roles = await adminService.getRoles();
+  reply.send({ success: true, data: roles });
+}
+
+export async function createRoleHandler(
+  request: FastifyRequest<{ Body: RoleBody }>,
+  reply: FastifyReply,
+): Promise<void> {
+  const name = request.body?.name?.trim();
+  if (!name) {
+    reply.code(400).send({ success: false, error: { code: 'VALIDATION_ERROR', message: 'name is required' } });
+    return;
+  }
+  const description   = request.body?.description?.trim() || null;
+  const color         = request.body?.color || null;
+  const permissions   = Array.isArray(request.body?.permissions) ? request.body.permissions : [];
+  const role = await adminService.createRole(name, description, color, permissions);
+  reply.code(201).send({ success: true, data: role });
+}
+
+export async function updateRoleHandler(
+  request: FastifyRequest<{ Params: IdParams; Body: RoleBody }>,
+  reply: FastifyReply,
+): Promise<void> {
+  const name = request.body?.name?.trim();
+  if (!name) {
+    reply.code(400).send({ success: false, error: { code: 'VALIDATION_ERROR', message: 'name is required' } });
+    return;
+  }
+  const description = request.body?.description?.trim() || null;
+  const color       = request.body?.color || null;
+  const permissions = Array.isArray(request.body?.permissions) ? request.body.permissions : [];
+  await adminService.updateRole(request.params.id, name, description, color, permissions);
+  reply.send({ success: true, data: null });
+}
+
+export async function deleteRoleHandler(
+  request: FastifyRequest<{ Params: IdParams }>,
+  reply: FastifyReply,
+): Promise<void> {
+  await adminService.deleteRole(request.params.id);
+  reply.send({ success: true, data: null });
+}
+
+export async function getRoleUsersHandler(
+  request: FastifyRequest<{ Params: IdParams }>,
+  reply: FastifyReply,
+): Promise<void> {
+  const users = await adminService.getRoleUsers(request.params.id);
+  reply.send({ success: true, data: users });
+}
+
+export async function assignUserToRoleHandler(
+  request: FastifyRequest<{ Params: IdParams; Body: AssignUserBody }>,
+  reply: FastifyReply,
+): Promise<void> {
+  const userId = request.body?.user_id?.trim();
+  if (!userId) {
+    reply.code(400).send({ success: false, error: { code: 'VALIDATION_ERROR', message: 'user_id is required' } });
+    return;
+  }
+  await adminService.assignUserToRole(userId, request.params.id, request.user.id);
+  reply.code(201).send({ success: true, data: null });
+}
+
+export async function removeUserFromRoleHandler(
+  request: FastifyRequest<{ Params: RoleUserParams }>,
+  reply: FastifyReply,
+): Promise<void> {
+  await adminService.removeUserFromRole(request.params.userId, request.params.id);
+  reply.send({ success: true, data: null });
 }
 
 export async function getPostsHandler(

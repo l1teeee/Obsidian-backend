@@ -497,6 +497,272 @@ interface InviteTokenRow extends RowDataPacket {
   expires_at:      Date;
 }
 
+// ─── Permissions & Roles ─────────────────────────────────────────────────────
+
+export interface SystemPermission {
+  key:      string;
+  name:     string;
+  category: string;
+}
+
+export interface PlanPermissions {
+  starter:    string[];
+  pro:        string[];
+  enterprise: string[];
+}
+
+export interface CustomRole {
+  id:          string;
+  name:        string;
+  description: string | null;
+  color:       string | null;
+  permissions: string[];
+  user_count:  number;
+  created_at:  Date;
+}
+
+export interface RoleUser {
+  id:          string;
+  email:       string;
+  name:        string | null;
+  plan:        string;
+  assigned_at: Date;
+}
+
+export const SYSTEM_PERMISSIONS: SystemPermission[] = [
+  { key: 'posts.view',              name: 'View Posts',              category: 'Posts' },
+  { key: 'posts.create',            name: 'Create Posts',            category: 'Posts' },
+  { key: 'posts.edit',              name: 'Edit Posts',              category: 'Posts' },
+  { key: 'posts.delete',            name: 'Delete Posts',            category: 'Posts' },
+  { key: 'posts.publish',           name: 'Publish Posts',           category: 'Posts' },
+  { key: 'posts.schedule',          name: 'Schedule Posts',          category: 'Posts' },
+  { key: 'analytics.view',          name: 'View Analytics',          category: 'Analytics' },
+  { key: 'analytics.export',        name: 'Export Analytics',        category: 'Analytics' },
+  { key: 'calendar.view',           name: 'View Calendar',           category: 'Calendar' },
+  { key: 'calendar.manage',         name: 'Manage Calendar',         category: 'Calendar' },
+  { key: 'platforms.view',          name: 'View Platforms',          category: 'Platforms' },
+  { key: 'platforms.connect',       name: 'Connect Platforms',       category: 'Platforms' },
+  { key: 'platforms.disconnect',    name: 'Disconnect Platforms',    category: 'Platforms' },
+  { key: 'ai.composer',             name: 'AI Composer',             category: 'AI Features' },
+  { key: 'ai.settings',             name: 'AI Settings',             category: 'AI Features' },
+  { key: 'ai.suggestions',          name: 'AI Suggestions',          category: 'AI Features' },
+  { key: 'brand.view',              name: 'View Brand',              category: 'Brand' },
+  { key: 'brand.manage',            name: 'Manage Brand',            category: 'Brand' },
+  { key: 'rivals.view',             name: 'View Rivals',             category: 'Rivals' },
+  { key: 'rivals.add',              name: 'Add Rivals',              category: 'Rivals' },
+  { key: 'rivals.delete',           name: 'Delete Rivals',           category: 'Rivals' },
+  { key: 'workspace.manage',        name: 'Manage Workspace',        category: 'Workspace' },
+  { key: 'workspace.invite',        name: 'Invite Members',          category: 'Workspace' },
+  { key: 'profile.edit',            name: 'Edit Profile',            category: 'Profile' },
+  { key: 'profile.view_activity',   name: 'View Activity History',   category: 'Profile' },
+];
+
+const PLAN_DEFAULTS: Record<string, string[]> = {
+  starter: [
+    'posts.view', 'posts.create', 'posts.edit', 'posts.delete', 'posts.schedule',
+    'analytics.view',
+    'calendar.view',
+    'platforms.view', 'platforms.connect', 'platforms.disconnect',
+    'brand.view', 'brand.manage',
+    'profile.edit', 'profile.view_activity',
+  ],
+  pro: [
+    'posts.view', 'posts.create', 'posts.edit', 'posts.delete', 'posts.schedule', 'posts.publish',
+    'analytics.view', 'analytics.export',
+    'calendar.view', 'calendar.manage',
+    'platforms.view', 'platforms.connect', 'platforms.disconnect',
+    'ai.composer', 'ai.suggestions',
+    'brand.view', 'brand.manage',
+    'rivals.view', 'rivals.add', 'rivals.delete',
+    'profile.edit', 'profile.view_activity',
+  ],
+  enterprise: [
+    'posts.view', 'posts.create', 'posts.edit', 'posts.delete', 'posts.schedule', 'posts.publish',
+    'analytics.view', 'analytics.export',
+    'calendar.view', 'calendar.manage',
+    'platforms.view', 'platforms.connect', 'platforms.disconnect',
+    'ai.composer', 'ai.settings', 'ai.suggestions',
+    'brand.view', 'brand.manage',
+    'rivals.view', 'rivals.add', 'rivals.delete',
+    'workspace.manage', 'workspace.invite',
+    'profile.edit', 'profile.view_activity',
+  ],
+};
+
+async function initRolesTables(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS plan_permissions (
+      plan        VARCHAR(20)  NOT NULL,
+      permission  VARCHAR(100) NOT NULL,
+      PRIMARY KEY (plan, permission)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS custom_roles (
+      id          VARCHAR(24)  NOT NULL,
+      name        VARCHAR(100) NOT NULL,
+      description VARCHAR(255) NULL,
+      color       VARCHAR(7)   NULL DEFAULT '#6366f1',
+      created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS custom_role_permissions (
+      role_id    VARCHAR(24)  NOT NULL,
+      permission VARCHAR(100) NOT NULL,
+      PRIMARY KEY (role_id, permission)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_custom_roles (
+      user_id     VARCHAR(24) NOT NULL,
+      role_id     VARCHAR(24) NOT NULL,
+      assigned_by VARCHAR(24) NULL,
+      assigned_at DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, role_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  const [[{ total }]] = await pool.query<CountRow[]>('SELECT COUNT(*) AS total FROM plan_permissions');
+  if (Number(total) === 0) {
+    for (const [plan, perms] of Object.entries(PLAN_DEFAULTS)) {
+      for (const perm of perms) {
+        await pool.query('INSERT IGNORE INTO plan_permissions (plan, permission) VALUES (?, ?)', [plan, perm]);
+      }
+    }
+  }
+}
+
+interface PlanPermRow extends RowDataPacket { plan: string; permission: string }
+interface RoleRow extends RowDataPacket {
+  id: string; name: string; description: string | null; color: string | null;
+  user_count: number; created_at: Date;
+}
+interface RolePermRow extends RowDataPacket { role_id: string; permission: string }
+interface RoleUserRow extends RowDataPacket {
+  id: string; email: string; name: string | null; plan: string; assigned_at: Date;
+}
+
+export async function getPlanPermissions(): Promise<PlanPermissions> {
+  const [rows] = await pool.query<PlanPermRow[]>('SELECT plan, permission FROM plan_permissions ORDER BY plan');
+  const result: PlanPermissions = { starter: [], pro: [], enterprise: [] };
+  for (const row of rows) {
+    if (row.plan in result) (result as unknown as Record<string, string[]>)[row.plan].push(row.permission);
+  }
+  return result;
+}
+
+export async function setPlanPermissions(plan: string, permissions: string[]): Promise<void> {
+  await pool.query('DELETE FROM plan_permissions WHERE plan = ?', [plan]);
+  for (const perm of permissions) {
+    await pool.query('INSERT INTO plan_permissions (plan, permission) VALUES (?, ?)', [plan, perm]);
+  }
+}
+
+export async function getRoles(): Promise<CustomRole[]> {
+  const [roles] = await pool.query<RoleRow[]>(`
+    SELECT r.id, r.name, r.description, r.color, r.created_at,
+           COUNT(DISTINCT ur.user_id) AS user_count
+    FROM custom_roles r
+    LEFT JOIN user_custom_roles ur ON ur.role_id = r.id
+    GROUP BY r.id
+    ORDER BY r.created_at DESC
+  `);
+
+  const [perms] = await pool.query<RolePermRow[]>('SELECT role_id, permission FROM custom_role_permissions');
+  const permMap: Record<string, string[]> = {};
+  for (const row of perms) {
+    if (!permMap[row.role_id]) permMap[row.role_id] = [];
+    permMap[row.role_id].push(row.permission);
+  }
+
+  return roles.map(r => ({
+    id:          r.id,
+    name:        r.name,
+    description: r.description,
+    color:       r.color,
+    permissions: permMap[r.id] ?? [],
+    user_count:  Number(r.user_count),
+    created_at:  r.created_at,
+  }));
+}
+
+export async function createRole(
+  name: string,
+  description: string | null,
+  color: string | null,
+  permissions: string[],
+): Promise<CustomRole> {
+  const id = uid();
+  const finalColor = color ?? '#6366f1';
+  await pool.query(
+    'INSERT INTO custom_roles (id, name, description, color) VALUES (?, ?, ?, ?)',
+    [id, name, description, finalColor],
+  );
+  for (const perm of permissions) {
+    await pool.query('INSERT INTO custom_role_permissions (role_id, permission) VALUES (?, ?)', [id, perm]);
+  }
+  return { id, name, description, color: finalColor, permissions, user_count: 0, created_at: new Date() };
+}
+
+export async function updateRole(
+  id: string,
+  name: string,
+  description: string | null,
+  color: string | null,
+  permissions: string[],
+): Promise<void> {
+  const [[role]] = await pool.query<RowDataPacket[]>('SELECT id FROM custom_roles WHERE id = ? LIMIT 1', [id]);
+  if (!role) throw Object.assign(new Error('Role not found'), { errorCode: 'NOT_FOUND', statusCode: 404 });
+
+  await pool.query('UPDATE custom_roles SET name = ?, description = ?, color = ? WHERE id = ?', [name, description, color, id]);
+  await pool.query('DELETE FROM custom_role_permissions WHERE role_id = ?', [id]);
+  for (const perm of permissions) {
+    await pool.query('INSERT INTO custom_role_permissions (role_id, permission) VALUES (?, ?)', [id, perm]);
+  }
+}
+
+export async function deleteRole(id: string): Promise<void> {
+  const [[role]] = await pool.query<RowDataPacket[]>('SELECT id FROM custom_roles WHERE id = ? LIMIT 1', [id]);
+  if (!role) throw Object.assign(new Error('Role not found'), { errorCode: 'NOT_FOUND', statusCode: 404 });
+
+  await pool.query('DELETE FROM user_custom_roles WHERE role_id = ?', [id]);
+  await pool.query('DELETE FROM custom_role_permissions WHERE role_id = ?', [id]);
+  await pool.query('DELETE FROM custom_roles WHERE id = ?', [id]);
+}
+
+export async function getRoleUsers(roleId: string): Promise<RoleUser[]> {
+  const [rows] = await pool.query<RoleUserRow[]>(`
+    SELECT u.id, u.email, u.name, u.plan, ur.assigned_at
+    FROM user_custom_roles ur
+    JOIN users u ON u.id = ur.user_id
+    WHERE ur.role_id = ?
+    ORDER BY ur.assigned_at DESC
+  `, [roleId]);
+  return rows.map(r => ({ id: r.id, email: r.email, name: r.name, plan: r.plan, assigned_at: r.assigned_at }));
+}
+
+export async function assignUserToRole(userId: string, roleId: string, assignedById: string): Promise<void> {
+  const [[role]] = await pool.query<RowDataPacket[]>('SELECT id FROM custom_roles WHERE id = ? LIMIT 1', [roleId]);
+  if (!role) throw Object.assign(new Error('Role not found'), { errorCode: 'NOT_FOUND', statusCode: 404 });
+
+  const [[user]] = await pool.query<RowDataPacket[]>('SELECT id FROM users WHERE id = ? LIMIT 1', [userId]);
+  if (!user) throw Object.assign(new Error('User not found'), { errorCode: 'NOT_FOUND', statusCode: 404 });
+
+  await pool.query(
+    'INSERT IGNORE INTO user_custom_roles (user_id, role_id, assigned_by) VALUES (?, ?, ?)',
+    [userId, roleId, assignedById],
+  );
+}
+
+export async function removeUserFromRole(userId: string, roleId: string): Promise<void> {
+  await pool.query('DELETE FROM user_custom_roles WHERE user_id = ? AND role_id = ?', [userId, roleId]);
+}
+
 // Auto-create tables / columns needed for admin invitations
 export async function initAdminTables(): Promise<void> {
   await pool.query(`
@@ -527,6 +793,8 @@ export async function initAdminTables(): Promise<void> {
     const code = (e as { code?: string }).code;
     if (code !== 'ER_DUP_FIELDNAME') throw e;
   }
+
+  await initRolesTables();
 }
 
 export async function getAdmins(): Promise<AdminInvitationEntry[]> {
