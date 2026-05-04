@@ -7,7 +7,8 @@ type PostActionBody  = { reason?: string };
 type UsersQuery      = { page?: string; limit?: string; search?: string; plan?: string };
 type WorkspacesQuery = { page?: string; limit?: string; search?: string };
 type PostsQuery      = { page?: string; limit?: string; platform?: string; status?: string; search?: string };
-type AddAdminBody    = { email?: string };
+type AddAdminBody       = { email?: string; role?: string };
+type RespondInviteBody  = { token?: string; action?: string };
 
 function page(v?: string)  { return Math.max(1, parseInt(v ?? '1', 10) || 1); }
 function limit(v?: string) { return Math.min(100, Math.max(1, parseInt(v ?? '50', 10) || 50)); }
@@ -116,13 +117,11 @@ export async function addAdminHandler(
     reply.code(400).send({ success: false, error: { code: 'VALIDATION_ERROR', message: 'email is required' } });
     return;
   }
-
-  // Get requester's name to include in the email
+  const role = request.body?.role === 'superadmin' ? 'superadmin' : 'admin';
   const requester = request.user as { id: string; name?: string | null };
-  const addedByName = requester.name ?? null;
 
-  const newAdmin = await adminService.addAdmin(email, addedByName);
-  reply.code(201).send({ success: true, data: newAdmin });
+  const newInvitation = await adminService.addAdmin(email, role, requester.id, requester.name ?? null);
+  reply.code(201).send({ success: true, data: newInvitation });
 }
 
 export async function removeAdminHandler(
@@ -131,6 +130,19 @@ export async function removeAdminHandler(
 ): Promise<void> {
   await adminService.removeAdmin(request.params.id, request.user.id);
   reply.send({ success: true, data: null });
+}
+
+export async function respondToInviteHandler(
+  request: FastifyRequest<{ Body: RespondInviteBody }>,
+  reply:   FastifyReply,
+): Promise<void> {
+  const { token, action } = request.body ?? {};
+  if (!token || (action !== 'accept' && action !== 'reject')) {
+    reply.code(400).send({ success: false, error: { code: 'VALIDATION_ERROR', message: 'token and action (accept|reject) are required' } });
+    return;
+  }
+  const result = await adminService.respondToInvite(token, action);
+  reply.send({ success: true, data: result });
 }
 
 export async function getPostsHandler(

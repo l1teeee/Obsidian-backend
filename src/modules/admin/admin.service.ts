@@ -1,6 +1,8 @@
+import { randomBytes } from 'crypto';
 import { RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
 import { sendPostStatusChangedEmail, sendAccountStatusChangedEmail, sendAdminInviteEmail } from '../../lib/email';
+import { uid } from '../../lib/uid';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -455,83 +457,197 @@ export async function getPosts(params: {
 
 // ─── Admins ───────────────────────────────────────────────────────────────────
 
-export interface AdminEntry {
-  id:         string;
-  email:      string;
-  name:       string | null;
-  created_at: Date;
-  added_by:   string | null;
+export type AdminRole = 'admin' | 'superadmin';
+
+export interface AdminInvitationEntry {
+  id:              string;
+  email:           string;
+  name:            string | null;
+  role:            AdminRole;
+  status:          'pending' | 'accepted' | 'rejected';
+  invited_by_name: string | null;
+  created_at:      Date;
+  responded_at:    Date | null;
 }
 
-interface AdminEntryRow extends RowDataPacket {
-  id:         string;
-  email:      string;
-  name:       string | null;
-  created_at: Date;
-  added_by:   string | null;
+interface InvitationRow extends RowDataPacket {
+  id:              string;
+  email:           string;
+  name:            string | null;
+  role:            AdminRole;
+  status:          'pending' | 'accepted' | 'rejected';
+  invited_by_name: string | null;
+  created_at:      Date;
+  responded_at:    Date | null;
 }
 
-interface AdminCheckRow extends RowDataPacket {
-  id:       string;
-  email:    string;
-  name:     string | null;
-  is_admin: number;
+interface UserCheckRow extends RowDataPacket {
+  id:           string;
+  email:        string;
+  name:         string | null;
+  is_admin:     number;
+  is_superadmin: number;
 }
 
-export async function getAdmins(): Promise<AdminEntry[]> {
-  const [rows] = await pool.query<AdminEntryRow[]>(
-    `SELECT id, email, name, created_at, NULL AS added_by
-     FROM users WHERE is_admin = 1 ORDER BY created_at ASC`,
-  );
+interface InviteTokenRow extends RowDataPacket {
+  id:              string;
+  user_id:         string;
+  role:            AdminRole;
+  status:          'pending' | 'accepted' | 'rejected';
+  expires_at:      Date;
+}
+
+// Auto-create tables / columns needed for admin invitations
+export async function initAdminTables(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_invitations (
+      id               VARCHAR(24)  NOT NULL,
+      user_id          VARCHAR(24)  NOT NULL,
+      email            VARCHAR(255) NOT NULL,
+      token            VARCHAR(64)  NOT NULL,
+      role             ENUM('admin','superadmin') NOT NULL DEFAULT 'admin',
+      status           ENUM('pending','accepted','rejected') NOT NULL DEFAULT 'pending',
+      invited_by_id    VARCHAR(24)  NULL,
+      invited_by_name  VARCHAR(255) NULL,
+      created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      responded_at     DATETIME     NULL,
+      expires_at       DATETIME     NOT NULL,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_token (token),
+      INDEX idx_email (email),
+      INDEX idx_user  (user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // Add is_superadmin to users if missing — MySQL doesn't support IF NOT EXISTS for columns,
+  // so we catch the duplicate column error and continue.
+  try {
+    await pool.query(`ALTER TABLE users ADD COLUMN is_superadmin TINYINT(1) NOT NULL DEFAULT 0`);
+  } catch (e: unknown) {
+    const code = (e as { code?: string }).code;
+    if (code !== 'ER_DUP_FIELDNAME') throw e;
+  }
+}
+
+export async function getAdmins(): Promise<AdminInvitationEntry[]> {
+  const [rows] = await pool.query<InvitationRow[]>(`
+    SELECT
+      i.id, i.email, u.name, i.role, i.status,
+      i.invited_by_name, i.created_at, i.responded_at
+    FROM admin_invitations i
+    JOIN users u ON u.id = i.user_id
+    ORDER BY i.created_at DESC
+  `);
   return rows.map(r => ({
-    id:         r.id,
-    email:      r.email,
-    name:       r.name,
-    created_at: r.created_at,
-    added_by:   r.added_by,
+    id:              r.id,
+    email:           r.email,
+    name:            r.name,
+    role:            r.role,
+    status:          r.status,
+    invited_by_name: r.invited_by_name,
+    created_at:      r.created_at,
+    responded_at:    r.responded_at,
   }));
 }
 
-export async function addAdmin(email: string, addedByName: string | null): Promise<AdminEntry> {
-  const [[row]] = await pool.query<AdminCheckRow[]>(
-    'SELECT id, email, name, is_admin FROM users WHERE email = ? LIMIT 1',
+export async function addAdmin(
+  email: string,
+  role: AdminRole,
+  invitedById: string,
+  invitedByName: string | null,
+): Promise<AdminInvitationEntry> {
+  const [[user]] = await pool.query<UserCheckRow[]>(
+    'SELECT id, email, name, is_admin, is_superadmin FROM users WHERE email = ? LIMIT 1',
     [email],
   );
-  if (!row) throw Object.assign(new Error('No user found with that email'), { errorCode: 'NOT_FOUND', statusCode: 404 });
-  if (row.is_admin) throw Object.assign(new Error('User is already an admin'), { errorCode: 'CONFLICT', statusCode: 409 });
+  if (!user) throw Object.assign(new Error('No user found with that email'), { errorCode: 'NOT_FOUND', statusCode: 404 });
 
-  await pool.query('UPDATE users SET is_admin = 1 WHERE id = ?', [row.id]);
+  // Block if there's already a pending or accepted invitation
+  const [[existing]] = await pool.query<RowDataPacket[]>(
+    `SELECT id FROM admin_invitations WHERE user_id = ? AND status IN ('pending','accepted') LIMIT 1`,
+    [user.id],
+  );
+  if (existing) throw Object.assign(new Error('This user already has an active or pending admin invitation'), { errorCode: 'CONFLICT', statusCode: 409 });
 
-  sendAdminInviteEmail(row.email, {
-    name:     row.name ?? undefined,
-    addedBy:  addedByName ?? undefined,
+  const id      = uid();
+  const token   = randomBytes(32).toString('hex');
+  const expires = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 hours
+
+  await pool.query(
+    `INSERT INTO admin_invitations (id, user_id, email, token, role, status, invited_by_id, invited_by_name, expires_at)
+     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+    [id, user.id, user.email, token, role, invitedById, invitedByName, expires],
+  );
+
+  sendAdminInviteEmail(user.email, {
+    name:    user.name ?? undefined,
+    addedBy: invitedByName ?? undefined,
+    token,
   });
 
-  const [[updated]] = await pool.query<AdminEntryRow[]>(
-    'SELECT id, email, name, created_at, NULL AS added_by FROM users WHERE id = ? LIMIT 1',
-    [row.id],
-  );
   return {
-    id:         updated.id,
-    email:      updated.email,
-    name:       updated.name,
-    created_at: updated.created_at,
-    added_by:   addedByName,
+    id,
+    email:           user.email,
+    name:            user.name,
+    role,
+    status:          'pending',
+    invited_by_name: invitedByName,
+    created_at:      new Date(),
+    responded_at:    null,
   };
 }
 
-export async function removeAdmin(targetId: string, requesterId: string): Promise<void> {
-  if (targetId === requesterId) {
+export async function removeAdmin(invitationId: string, requesterId: string): Promise<void> {
+  const [[inv]] = await pool.query<RowDataPacket[]>(
+    'SELECT id, user_id, status FROM admin_invitations WHERE id = ? LIMIT 1',
+    [invitationId],
+  );
+  if (!inv) throw Object.assign(new Error('Invitation not found'), { errorCode: 'NOT_FOUND', statusCode: 404 });
+
+  const row = inv as { id: string; user_id: string; status: string };
+  if (row.user_id === requesterId) {
     throw Object.assign(new Error('You cannot remove your own admin access'), { errorCode: 'FORBIDDEN', statusCode: 403 });
   }
-  const [[row]] = await pool.query<AdminCheckRow[]>(
-    'SELECT id, is_admin FROM users WHERE id = ? LIMIT 1',
-    [targetId],
-  );
-  if (!row) throw Object.assign(new Error('User not found'), { errorCode: 'NOT_FOUND', statusCode: 404 });
-  if (!row.is_admin) throw Object.assign(new Error('User is not an admin'), { errorCode: 'CONFLICT', statusCode: 409 });
 
-  await pool.query('UPDATE users SET is_admin = 0 WHERE id = ?', [targetId]);
+  await pool.query('DELETE FROM admin_invitations WHERE id = ?', [invitationId]);
+
+  // If invitation was accepted, revoke is_admin / is_superadmin from user
+  if (row.status === 'accepted') {
+    await pool.query('UPDATE users SET is_admin = 0, is_superadmin = 0 WHERE id = ?', [row.user_id]);
+  }
+}
+
+export async function respondToInvite(token: string, action: 'accept' | 'reject'): Promise<{ status: 'accepted' | 'rejected'; email: string }> {
+  const [[inv]] = await pool.query<InviteTokenRow[]>(
+    `SELECT id, user_id, role, status, expires_at
+     FROM admin_invitations WHERE token = ? LIMIT 1`,
+    [token],
+  );
+  if (!inv) throw Object.assign(new Error('Invalid or expired invitation link'), { errorCode: 'NOT_FOUND', statusCode: 404 });
+  if (inv.status !== 'pending') throw Object.assign(new Error(`Invitation already ${inv.status}`), { errorCode: 'CONFLICT', statusCode: 409 });
+  if (new Date() > inv.expires_at) throw Object.assign(new Error('Invitation link has expired'), { errorCode: 'EXPIRED', statusCode: 410 });
+
+  const newStatus = action === 'accept' ? 'accepted' : 'rejected';
+
+  await pool.query(
+    `UPDATE admin_invitations SET status = ?, responded_at = NOW() WHERE id = ?`,
+    [newStatus, inv.id],
+  );
+
+  if (action === 'accept') {
+    const isSuperadmin = inv.role === 'superadmin' ? 1 : 0;
+    await pool.query(
+      'UPDATE users SET is_admin = 1, is_superadmin = ? WHERE id = ?',
+      [isSuperadmin, inv.user_id],
+    );
+  }
+
+  const [[userRow]] = await pool.query<RowDataPacket[]>(
+    'SELECT email FROM users WHERE id = ? LIMIT 1',
+    [inv.user_id],
+  );
+
+  return { status: newStatus, email: (userRow as { email: string }).email };
 }
 
 // ─── User activate / deactivate ───────────────────────────────────────────────
