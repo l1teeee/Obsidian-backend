@@ -9,6 +9,7 @@ import { PostCreated }          from './emails/PostCreated';
 import { PlatformConnected }    from './emails/PlatformConnected';
 import { PostStatusChanged }    from './emails/PostStatusChanged';
 import { AccountStatusChanged } from './emails/AccountStatusChanged';
+import { ProfileUpdated }        from './emails/ProfileUpdated';
 
 const brevo = new BrevoClient({
   apiKey:      env.BREVO_API_KEY,
@@ -119,6 +120,23 @@ export async function sendAccountStatusChangedEmail(
     await send(toEmail, `Your Vielink account has been ${opts.action}`, html);
   } catch (err) {
     console.error('[EMAIL] account status changed email error:', err);
+  }
+}
+
+export async function sendProfileUpdatedEmail(
+  toEmail: string,
+  opts: { name?: string; updatedFields: string[] },
+): Promise<void> {
+  const now        = new Date();
+  const updatedAt  = now.toLocaleString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'America/Mexico_City' });
+  const profileUrl = `${env.FRONTEND_URL}/profile`;
+  const html = await render(
+    React.createElement(ProfileUpdated, { email: toEmail, ...opts, updatedAt, profileUrl }),
+  );
+  try {
+    await send(toEmail, 'Your Vielink profile has been updated', html);
+  } catch (err) {
+    console.error('[EMAIL] profile updated email error:', err);
   }
 }
 
