@@ -7,6 +7,7 @@ type PostActionBody  = { reason?: string };
 type UsersQuery      = { page?: string; limit?: string; search?: string; plan?: string };
 type WorkspacesQuery = { page?: string; limit?: string; search?: string };
 type PostsQuery      = { page?: string; limit?: string; platform?: string; status?: string; search?: string };
+type AddAdminBody    = { email?: string };
 
 function page(v?: string)  { return Math.max(1, parseInt(v ?? '1', 10) || 1); }
 function limit(v?: string) { return Math.min(100, Math.max(1, parseInt(v ?? '50', 10) || 50)); }
@@ -96,6 +97,40 @@ export async function getWorkspacesHandler(
     search: search || undefined,
   });
   reply.send({ success: true, data: result.workspaces, meta: result.meta });
+}
+
+export async function getAdminsHandler(
+  _req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const data = await adminService.getAdmins();
+  reply.send({ success: true, data });
+}
+
+export async function addAdminHandler(
+  request: FastifyRequest<{ Body: AddAdminBody }>,
+  reply:   FastifyReply,
+): Promise<void> {
+  const email = request.body?.email?.trim().toLowerCase();
+  if (!email) {
+    reply.code(400).send({ success: false, error: { code: 'VALIDATION_ERROR', message: 'email is required' } });
+    return;
+  }
+
+  // Get requester's name to include in the email
+  const requester = request.user as { id: string; name?: string | null };
+  const addedByName = requester.name ?? null;
+
+  const newAdmin = await adminService.addAdmin(email, addedByName);
+  reply.code(201).send({ success: true, data: newAdmin });
+}
+
+export async function removeAdminHandler(
+  request: FastifyRequest<{ Params: IdParams }>,
+  reply:   FastifyReply,
+): Promise<void> {
+  await adminService.removeAdmin(request.params.id, request.user.id);
+  reply.send({ success: true, data: null });
 }
 
 export async function getPostsHandler(

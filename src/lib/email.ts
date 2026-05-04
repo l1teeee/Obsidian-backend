@@ -10,6 +10,7 @@ import { PlatformConnected }    from './emails/PlatformConnected';
 import { PostStatusChanged }    from './emails/PostStatusChanged';
 import { AccountStatusChanged } from './emails/AccountStatusChanged';
 import { ProfileUpdated }        from './emails/ProfileUpdated';
+import { AdminInvite }          from './emails/AdminInvite';
 
 const brevo = new BrevoClient({
   apiKey:      env.BREVO_API_KEY,
@@ -137,6 +138,21 @@ export async function sendProfileUpdatedEmail(
     await send(toEmail, 'Your Vielink profile has been updated', html);
   } catch (err) {
     console.error('[EMAIL] profile updated email error:', err);
+  }
+}
+
+export async function sendAdminInviteEmail(
+  toEmail: string,
+  opts: { name?: string; addedBy?: string },
+): Promise<void> {
+  const dashboardUrl = `${env.FRONTEND_URL}/admin`;
+  const html = await render(
+    React.createElement(AdminInvite, { email: toEmail, ...opts, dashboardUrl }),
+  );
+  try {
+    await send(toEmail, 'You have been granted admin access to Vielink', html);
+  } catch (err) {
+    console.error('[EMAIL] admin invite email error:', err);
   }
 }
 

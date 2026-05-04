@@ -1,6 +1,6 @@
 import { RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
-import { sendPostStatusChangedEmail, sendAccountStatusChangedEmail } from '../../lib/email';
+import { sendPostStatusChangedEmail, sendAccountStatusChangedEmail, sendAdminInviteEmail } from '../../lib/email';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -451,6 +451,87 @@ export async function getPosts(params: {
     })),
     meta: { page, limit, total: Number(total) },
   };
+}
+
+// ─── Admins ───────────────────────────────────────────────────────────────────
+
+export interface AdminEntry {
+  id:         string;
+  email:      string;
+  name:       string | null;
+  created_at: Date;
+  added_by:   string | null;
+}
+
+interface AdminEntryRow extends RowDataPacket {
+  id:         string;
+  email:      string;
+  name:       string | null;
+  created_at: Date;
+  added_by:   string | null;
+}
+
+interface AdminCheckRow extends RowDataPacket {
+  id:       string;
+  email:    string;
+  name:     string | null;
+  is_admin: number;
+}
+
+export async function getAdmins(): Promise<AdminEntry[]> {
+  const [rows] = await pool.query<AdminEntryRow[]>(
+    `SELECT id, email, name, created_at, NULL AS added_by
+     FROM users WHERE is_admin = 1 ORDER BY created_at ASC`,
+  );
+  return rows.map(r => ({
+    id:         r.id,
+    email:      r.email,
+    name:       r.name,
+    created_at: r.created_at,
+    added_by:   r.added_by,
+  }));
+}
+
+export async function addAdmin(email: string, addedByName: string | null): Promise<AdminEntry> {
+  const [[row]] = await pool.query<AdminCheckRow[]>(
+    'SELECT id, email, name, is_admin FROM users WHERE email = ? LIMIT 1',
+    [email],
+  );
+  if (!row) throw Object.assign(new Error('No user found with that email'), { errorCode: 'NOT_FOUND', statusCode: 404 });
+  if (row.is_admin) throw Object.assign(new Error('User is already an admin'), { errorCode: 'CONFLICT', statusCode: 409 });
+
+  await pool.query('UPDATE users SET is_admin = 1 WHERE id = ?', [row.id]);
+
+  sendAdminInviteEmail(row.email, {
+    name:     row.name ?? undefined,
+    addedBy:  addedByName ?? undefined,
+  });
+
+  const [[updated]] = await pool.query<AdminEntryRow[]>(
+    'SELECT id, email, name, created_at, NULL AS added_by FROM users WHERE id = ? LIMIT 1',
+    [row.id],
+  );
+  return {
+    id:         updated.id,
+    email:      updated.email,
+    name:       updated.name,
+    created_at: updated.created_at,
+    added_by:   addedByName,
+  };
+}
+
+export async function removeAdmin(targetId: string, requesterId: string): Promise<void> {
+  if (targetId === requesterId) {
+    throw Object.assign(new Error('You cannot remove your own admin access'), { errorCode: 'FORBIDDEN', statusCode: 403 });
+  }
+  const [[row]] = await pool.query<AdminCheckRow[]>(
+    'SELECT id, is_admin FROM users WHERE id = ? LIMIT 1',
+    [targetId],
+  );
+  if (!row) throw Object.assign(new Error('User not found'), { errorCode: 'NOT_FOUND', statusCode: 404 });
+  if (!row.is_admin) throw Object.assign(new Error('User is not an admin'), { errorCode: 'CONFLICT', statusCode: 409 });
+
+  await pool.query('UPDATE users SET is_admin = 0 WHERE id = ?', [targetId]);
 }
 
 // ─── User activate / deactivate ───────────────────────────────────────────────

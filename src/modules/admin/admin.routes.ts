@@ -12,6 +12,9 @@ import {
   activateUserHandler,
   deactivateWorkspaceHandler,
   activateWorkspaceHandler,
+  getAdminsHandler,
+  addAdminHandler,
+  removeAdminHandler,
 } from './admin.controller';
 
 interface AdminRow extends RowDataPacket { is_admin: number }
@@ -46,6 +49,10 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch('/users/:id/activate',        { config: { rateLimit: ADMIN_LIMIT } }, activateUserHandler);
   fastify.patch('/workspaces/:id/deactivate', { config: { rateLimit: ADMIN_LIMIT } }, deactivateWorkspaceHandler);
   fastify.patch('/workspaces/:id/activate',   { config: { rateLimit: ADMIN_LIMIT } }, activateWorkspaceHandler);
+
+  fastify.get('/admins',        { config: { rateLimit: ADMIN_LIMIT } }, getAdminsHandler);
+  fastify.post('/admins',       { config: { rateLimit: ADMIN_LIMIT } }, addAdminHandler);
+  fastify.delete('/admins/:id', { config: { rateLimit: ADMIN_LIMIT } }, removeAdminHandler);
 };
 
 export default adminRoutes;
