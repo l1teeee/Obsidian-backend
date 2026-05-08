@@ -19,11 +19,12 @@ async function tokenLimitGuard(request: FastifyRequest, reply: FastifyReply): Pr
 
 export default async function aiRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', tokenLimitGuard);
 
-  fastify.post('/inspire',        { schema: inspireSchema,       config: { rateLimit: AI_LIMIT }, preHandler: [tokenLimitGuard] }, inspireHandler      );
-  fastify.post('/generate-image', { schema: generateImageSchema, config: { rateLimit: AI_LIMIT }, preHandler: [tokenLimitGuard] }, generateImageHandler);
-  fastify.post('/edit-image',     { schema: editImageSchema,     config: { rateLimit: AI_LIMIT }, preHandler: [tokenLimitGuard] }, editImageHandler    );
-  fastify.post('/suggest-time',   { schema: suggestTimeSchema,   config: { rateLimit: AI_LIMIT }, preHandler: [tokenLimitGuard] }, suggestTimeHandler  );
-  fastify.post('/analyze-image',  { schema: analyzeImageSchema,  config: { rateLimit: AI_LIMIT }, preHandler: [tokenLimitGuard] }, analyzeImageHandler );
-  fastify.post('/carousel-slides',{ schema: carouselSlidesSchema,config: { rateLimit: AI_LIMIT }, preHandler: [tokenLimitGuard] }, carouselSlidesHandler);
+  fastify.post('/inspire',        { schema: inspireSchema,       config: { rateLimit: AI_LIMIT } }, inspireHandler      );
+  fastify.post('/generate-image', { schema: generateImageSchema, config: { rateLimit: AI_LIMIT } }, generateImageHandler);
+  fastify.post('/edit-image',     { schema: editImageSchema,     config: { rateLimit: AI_LIMIT } }, editImageHandler    );
+  fastify.post('/suggest-time',   { schema: suggestTimeSchema,   config: { rateLimit: AI_LIMIT } }, suggestTimeHandler  );
+  fastify.post('/analyze-image',  { schema: analyzeImageSchema,  config: { rateLimit: AI_LIMIT } }, analyzeImageHandler );
+  fastify.post('/carousel-slides',{ schema: carouselSlidesSchema,config: { rateLimit: AI_LIMIT } }, carouselSlidesHandler);
 }
