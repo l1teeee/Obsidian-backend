@@ -143,15 +143,14 @@ export async function sendProfileUpdatedEmail(
 
 export async function sendAdminInviteEmail(
   toEmail: string,
-  opts: { name?: string; addedBy?: string; token: string },
+  opts: { name?: string; addedBy?: string; role?: 'admin' | 'superadmin' },
 ): Promise<void> {
-  const acceptUrl = `${env.FRONTEND_URL}/admin-invite?token=${opts.token}&action=accept`;
-  const rejectUrl = `${env.FRONTEND_URL}/admin-invite?token=${opts.token}&action=reject`;
+  const dashboardUrl = `${env.FRONTEND_URL}/dashboard`;
   const html = await render(
-    React.createElement(AdminInvite, { email: toEmail, name: opts.name, addedBy: opts.addedBy, acceptUrl, rejectUrl }),
+    React.createElement(AdminInvite, { email: toEmail, name: opts.name, addedBy: opts.addedBy, role: opts.role, dashboardUrl }),
   );
   try {
-    await send(toEmail, 'You have been invited to become an admin on Vielink', html);
+    await send(toEmail, 'You are now an administrator on Vielinks', html);
   } catch (err) {
     console.error('[EMAIL] admin invite email error:', err);
   }

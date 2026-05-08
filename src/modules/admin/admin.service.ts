@@ -506,6 +506,7 @@ export interface SystemPermission {
 }
 
 export interface PlanPermissions {
+  free:       string[];
   starter:    string[];
   pro:        string[];
   enterprise: string[];
@@ -558,6 +559,13 @@ export const SYSTEM_PERMISSIONS: SystemPermission[] = [
 ];
 
 const PLAN_DEFAULTS: Record<string, string[]> = {
+  free: [
+    'posts.view',
+    'analytics.view',
+    'platforms.view',
+    'brand.view',
+    'profile.edit',
+  ],
   starter: [
     'posts.view', 'posts.create', 'posts.edit', 'posts.delete', 'posts.schedule',
     'analytics.view',
@@ -595,7 +603,7 @@ async function initRolesTables(): Promise<void> {
       plan        VARCHAR(20)  NOT NULL,
       permission  VARCHAR(100) NOT NULL,
       PRIMARY KEY (plan, permission)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
   await pool.query(`
@@ -606,7 +614,7 @@ async function initRolesTables(): Promise<void> {
       color       VARCHAR(7)   NULL DEFAULT '#6366f1',
       created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
   await pool.query(`
@@ -614,7 +622,7 @@ async function initRolesTables(): Promise<void> {
       role_id    VARCHAR(24)  NOT NULL,
       permission VARCHAR(100) NOT NULL,
       PRIMARY KEY (role_id, permission)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
   await pool.query(`
@@ -624,8 +632,16 @@ async function initRolesTables(): Promise<void> {
       assigned_by VARCHAR(24) NULL,
       assigned_at DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (user_id, role_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  // Fix collation of existing tables that may have been created with wrong collation
+  const roleTables = ['plan_permissions', 'custom_roles', 'custom_role_permissions', 'user_custom_roles'];
+  for (const table of roleTables) {
+    try {
+      await pool.query(`ALTER TABLE ${table} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    } catch { /* already correct collation or table doesn't exist yet */ }
+  }
 
   const [[{ total }]] = await pool.query<CountRow[]>('SELECT COUNT(*) AS total FROM plan_permissions');
   if (Number(total) === 0) {
@@ -649,7 +665,7 @@ interface RoleUserRow extends RowDataPacket {
 
 export async function getPlanPermissions(): Promise<PlanPermissions> {
   const [rows] = await pool.query<PlanPermRow[]>('SELECT plan, permission FROM plan_permissions ORDER BY plan');
-  const result: PlanPermissions = { starter: [], pro: [], enterprise: [] };
+  const result: PlanPermissions = { free: [], starter: [], pro: [], enterprise: [] };
   for (const row of rows) {
     if (row.plan in result) (result as unknown as Record<string, string[]>)[row.plan].push(row.permission);
   }
@@ -782,8 +798,13 @@ export async function initAdminTables(): Promise<void> {
       UNIQUE KEY uq_token (token),
       INDEX idx_email (email),
       INDEX idx_user  (user_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  // Fix collation of admin_invitations if it was created with wrong collation
+  try {
+    await pool.query(`ALTER TABLE admin_invitations CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+  } catch { /* already correct or doesn't exist */ }
 
   // Add is_superadmin to users if missing — MySQL doesn't support IF NOT EXISTS for columns,
   // so we catch the duplicate column error and continue.
@@ -830,27 +851,31 @@ export async function addAdmin(
   );
   if (!user) throw Object.assign(new Error('No user found with that email'), { errorCode: 'NOT_FOUND', statusCode: 404 });
 
-  // Block if there's already a pending or accepted invitation
-  const [[existing]] = await pool.query<RowDataPacket[]>(
-    `SELECT id FROM admin_invitations WHERE user_id = ? AND status IN ('pending','accepted') LIMIT 1`,
-    [user.id],
-  );
-  if (existing) throw Object.assign(new Error('This user already has an active or pending admin invitation'), { errorCode: 'CONFLICT', statusCode: 409 });
+  // Block if already an admin
+  if (user.is_admin) throw Object.assign(new Error('This user is already an administrator'), { errorCode: 'CONFLICT', statusCode: 409 });
 
-  const id      = uid();
-  const token   = randomBytes(32).toString('hex');
-  const expires = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 hours
+  const id           = uid();
+  const token        = randomBytes(32).toString('hex'); // stored for audit trail
+  const expires      = new Date(Date.now() + 72 * 60 * 60 * 1000);
+  const now          = new Date();
+  const isSuperadmin = role === 'superadmin' ? 1 : 0;
+
+  // Grant admin rights immediately — no accept/reject needed
+  await pool.query(
+    'UPDATE users SET is_admin = 1, is_superadmin = ? WHERE id = ?',
+    [isSuperadmin, user.id],
+  );
 
   await pool.query(
-    `INSERT INTO admin_invitations (id, user_id, email, token, role, status, invited_by_id, invited_by_name, expires_at)
-     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+    `INSERT INTO admin_invitations (id, user_id, email, token, role, status, invited_by_id, invited_by_name, expires_at, responded_at)
+     VALUES (?, ?, ?, ?, ?, 'accepted', ?, ?, ?, NOW())`,
     [id, user.id, user.email, token, role, invitedById, invitedByName, expires],
   );
 
   sendAdminInviteEmail(user.email, {
     name:    user.name ?? undefined,
     addedBy: invitedByName ?? undefined,
-    token,
+    role,
   });
 
   return {
@@ -858,10 +883,10 @@ export async function addAdmin(
     email:           user.email,
     name:            user.name,
     role,
-    status:          'pending',
+    status:          'accepted',
     invited_by_name: invitedByName,
-    created_at:      new Date(),
-    responded_at:    null,
+    created_at:      now,
+    responded_at:    now,
   };
 }
 

@@ -8,6 +8,7 @@ import {
   getActivityHandler,
   getAllActivityHandler,
   updateAvatarHandler,
+  getTokenStatusHandler,
 } from './users.controller';
 
 const completeProfileSchema = {
@@ -71,6 +72,7 @@ const usersRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/me/activity',        { config: { rateLimit: USERS_LIMIT } }, getActivityHandler);
   fastify.get('/me/activity/all',    { config: { rateLimit: USERS_LIMIT } }, getAllActivityHandler);
   fastify.patch('/me/avatar',        { schema: updateAvatarSchema, config: { rateLimit: USERS_LIMIT } }, updateAvatarHandler);
+  fastify.get('/me/tokens',          { config: { rateLimit: USERS_LIMIT } }, getTokenStatusHandler);
 };
 
 export default usersRoutes;

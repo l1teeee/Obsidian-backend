@@ -1,6 +1,7 @@
 import { env } from '../../config/env';
 import { getByWorkspace } from '../ai-settings/ai-settings.service';
 import type { AiSettings } from '../ai-settings/ai-settings.service';
+import { logTokenUsage } from '../admin/token.service';
 
 export interface GenerateImageOptions {
   prompt: string;
@@ -221,8 +222,10 @@ function buildSystemPrompt(
 export interface SuggestTimeOptions {
   caption:      string;
   platforms:    string[];
-  currentHour?: number;   // client's local hour (0-23) — use instead of server time
-  weekday?:     string;   // client's local weekday name
+  currentHour?: number;
+  weekday?:     string;
+  userId?:      string;
+  workspaceId?: string;
 }
 
 export interface SuggestTimeResult {
@@ -241,7 +244,7 @@ export async function suggestScheduleTime(options: SuggestTimeOptions): Promise<
     );
   }
 
-  const { caption, platforms, currentHour, weekday: clientWeekday } = options;
+  const { caption, platforms, currentHour, weekday: clientWeekday, userId, workspaceId } = options;
   const platformNames = platforms.map(p => {
     const map: Record<string, string> = { meta: 'Instagram/Facebook', linkedin: 'LinkedIn', youtube: 'YouTube' };
     return map[p] ?? p;
@@ -300,8 +303,12 @@ Return ONLY a JSON object (no markdown, no explanation):
 
   interface OpenAIResponse {
     choices: Array<{ message: { content: string | null } }>;
+    usage?: { prompt_tokens: number; completion_tokens: number };
   }
   const data    = await res.json() as OpenAIResponse;
+  if (userId && data.usage) {
+    logTokenUsage(userId, workspaceId ?? null, 'schedule_suggest', env.OPENAI_MODEL, data.usage.prompt_tokens, data.usage.completion_tokens).catch(() => {});
+  }
   const content = data.choices[0]?.message.content?.trim();
 
   if (!content) throw appError('AI_ERROR', 'Empty response from OpenAI', 502);
@@ -570,8 +577,12 @@ Output rules (structural only — style and tone follow your system instructions
 
   interface OpenAIResponse {
     choices: Array<{ message: { content: string | null } }>;
+    usage?: { prompt_tokens: number; completion_tokens: number };
   }
   const data    = await res.json() as OpenAIResponse;
+  if (userId && data.usage) {
+    logTokenUsage(userId, workspaceId ?? null, 'caption_suggestions', model, data.usage.prompt_tokens, data.usage.completion_tokens).catch(() => {});
+  }
   const content = data.choices[0]?.message.content?.trim();
 
   if (!content) throw appError('AI_ERROR', 'Empty response from OpenAI', 502);

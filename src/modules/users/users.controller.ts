@@ -1,6 +1,7 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import * as usersService from './users.service';
 import { sendProfileUpdatedEmail } from '../../lib/email';
+import { checkTokenLimit } from '../admin/token.service';
 
 type CompleteProfileBody   = { name: string; role: string; country: string };
 type UpdateProfileBody     = { name?: string; role?: string; country?: string };
@@ -66,6 +67,15 @@ export async function getAllActivityHandler(
 ): Promise<void> {
   const activity = await usersService.getAllActivity(request.user.id);
   reply.send({ success: true, data: activity });
+}
+
+export async function getTokenStatusHandler(
+  request: FastifyRequest,
+  reply:   FastifyReply,
+): Promise<void> {
+  const profile = await usersService.getMe(request.user.id);
+  const status = await checkTokenLimit(request.user.id, profile.plan);
+  reply.send({ success: true, data: { ...status, plan: profile.plan } });
 }
 
 export async function updateAvatarHandler(

@@ -167,7 +167,7 @@ export async function setPlanPermissionsHandler(
   reply: FastifyReply,
 ): Promise<void> {
   const { plan } = request.params;
-  if (!['starter', 'pro', 'enterprise'].includes(plan)) {
+  if (!['free', 'starter', 'pro', 'enterprise'].includes(plan)) {
     reply.code(400).send({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid plan' } });
     return;
   }

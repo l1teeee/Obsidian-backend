@@ -1,7 +1,7 @@
 import { RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
 
-export type UserPlan = 'starter' | 'pro' | 'enterprise';
+export type UserPlan = 'free' | 'starter' | 'pro' | 'enterprise';
 
 export interface UserProfile {
   id:                string;
@@ -12,6 +12,7 @@ export interface UserProfile {
   avatar_url:        string | null;
   plan:              UserPlan;
   is_admin:          boolean;
+  is_superadmin:     boolean;
   profile_completed: boolean;
   created_at:        Date;
 }
@@ -24,7 +25,7 @@ function appError(errorCode: string, message: string, statusCode: number): Error
 
 export async function getMe(userId: string): Promise<UserProfile> {
   const [rows] = await pool.query<UserRow[]>(
-    'SELECT id, email, name, role, country, avatar_url, plan, is_admin, profile_completed, created_at FROM users WHERE id = ? LIMIT 1',
+    'SELECT id, email, name, role, country, avatar_url, plan, is_admin, is_superadmin, profile_completed, created_at FROM users WHERE id = ? LIMIT 1',
     [userId],
   );
   const user = rows[0];
@@ -33,6 +34,7 @@ export async function getMe(userId: string): Promise<UserProfile> {
     ...user,
     plan:              (user.plan ?? 'starter') as UserPlan,
     is_admin:          Boolean(user.is_admin),
+    is_superadmin:     Boolean(user.is_superadmin),
     profile_completed: Boolean(user.profile_completed),
     avatar_url:        user.avatar_url ?? null,
   };
@@ -76,7 +78,7 @@ export async function updateAvatar(userId: string, avatarUrl: string): Promise<v
 }
 
 export async function updatePlan(userId: string, plan: UserPlan): Promise<void> {
-  if (!['starter', 'pro', 'enterprise'].includes(plan)) {
+  if (!['free', 'starter', 'pro', 'enterprise'].includes(plan)) {
     throw appError('INVALID_PLAN', 'Invalid plan', 400);
   }
   await pool.query('UPDATE users SET plan = ? WHERE id = ?', [plan, userId]);
