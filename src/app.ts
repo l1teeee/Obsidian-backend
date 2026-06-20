@@ -20,6 +20,7 @@ import usersRoutes        from './modules/users/users.routes';
 import platformsRoutes    from './modules/platforms/platforms.routes';
 import metricsRoutes      from './modules/metrics/metrics.routes';
 import adminRoutes        from './modules/admin/admin.routes';
+import paymentsRoutes     from './modules/payments/payments.routes';
 
 interface AppError extends FastifyError {
   errorCode?: string;
@@ -145,6 +146,7 @@ export function buildApp() {
   fastify.register(platformsRoutes,  { prefix: '/platforms' });
   fastify.register(metricsRoutes,    { prefix: '/metrics' });
   fastify.register(adminRoutes,      { prefix: '/admin' });
+  fastify.register(paymentsRoutes,   { prefix: '/payments' });
 
   return fastify;
 }
