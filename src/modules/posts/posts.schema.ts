@@ -1,6 +1,6 @@
 const platformEnum   = { type: 'string', enum: ['meta', 'linkedin', 'youtube', 'facebook', 'instagram'] };
 const postTypeEnum   = { type: 'string', enum: ['post', 'reel', 'story', 'video', 'carousel'] };
-const statusEnum     = { type: 'string', enum: ['draft', 'scheduled', 'published', 'inactive', 'deleted'] };
+const statusEnum     = { type: 'string', enum: ['draft', 'scheduled', 'published', 'inactive', 'deleted', 'failed'] };
 const mediaUrlsSchema = { type: 'array', items: { type: 'string', format: 'uri' } };
 const idParam = {
   type: 'object',

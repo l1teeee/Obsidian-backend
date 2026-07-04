@@ -384,9 +384,10 @@ interface PostRow extends RowDataPacket {
   post_type:        'post' | 'reel' | 'story' | 'video' | 'carousel';
   caption:          string | null;
   media_urls:       string | null;
+  page_id:          string | null;
   permalink:        string | null;
   platform_post_id: string | null;
-  status:           'draft' | 'scheduled' | 'published' | 'inactive' | 'deleted';
+  status:           'draft' | 'scheduled' | 'published' | 'inactive' | 'deleted' | 'failed';
   scheduled_at:     Date | null;
   published_at:     Date | null;
   created_at:       Date;
@@ -404,6 +405,7 @@ export interface Post {
   post_type:        string;
   caption:          string | null;
   media_urls:       string[] | null;
+  page_id:          string | null;
   permalink:        string | null;
   platform_post_id: string | null;
   status:           string;
@@ -510,8 +512,8 @@ export async function createPost(userId: string, data: CreatePostData): Promise<
   const status        = data.status ?? 'draft';
 
   await pool.query<ResultSetHeader>(
-    `INSERT INTO posts (id, user_id, platform, post_type, caption, media_urls, scheduled_at, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO posts (id, user_id, platform, post_type, caption, media_urls, page_id, scheduled_at, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       userId,
@@ -519,6 +521,7 @@ export async function createPost(userId: string, data: CreatePostData): Promise<
       data.post_type   ?? 'post',
       data.caption     ?? null,
       mediaUrlsJson,
+      data.page_id     ?? null,
       data.scheduled_at ? toMysqlDatetime(data.scheduled_at) : null,
       status,
     ]
@@ -584,6 +587,7 @@ export async function updatePost(id: string, userId: string, data: UpdatePostDat
   if (data.post_type    !== undefined) { fields.push('post_type = ?');    values.push(data.post_type);    }
   if (data.caption      !== undefined) { fields.push('caption = ?');      values.push(data.caption);      }
   if (data.media_urls   !== undefined) { fields.push('media_urls = ?');   values.push(JSON.stringify(data.media_urls)); }
+  if (data.page_id      !== undefined) { fields.push('page_id = ?');      values.push(data.page_id ?? null); }
   if (data.permalink    !== undefined) { fields.push('permalink = ?');    values.push(data.permalink);    }
   if (data.scheduled_at !== undefined) { fields.push('scheduled_at = ?'); values.push(data.scheduled_at ? toMysqlDatetime(data.scheduled_at) : null); }
   if (data.published_at !== undefined) { fields.push('published_at = ?'); values.push(data.published_at); }
@@ -694,6 +698,54 @@ export async function deletePost(id: string, userId: string, removeFromPlatform 
   }
 
   return fbDeleteFailed ? { fbDeleteFailed: true } : {};
+}
+
+// ─── Scheduled publishing ────────────────────────────────────────────────────
+
+export interface ScheduledPublishStats {
+  processed: number;
+  succeeded: number;
+  failed:    number;
+}
+
+export async function runScheduledPublishing(): Promise<ScheduledPublishStats> {
+  const [rows] = await pool.query<PostRow[]>(
+    `SELECT * FROM posts WHERE status = 'scheduled' AND scheduled_at IS NOT NULL AND scheduled_at <= NOW()`,
+  );
+
+  let succeeded = 0;
+  let failed    = 0;
+
+  for (const row of rows) {
+    const post = deserializePost(row);
+    try {
+      if (post.platform === 'facebook') {
+        const result = await publishToFacebook(post.user_id, post.caption ?? '', post.media_urls ?? [], post.page_id ?? null);
+        await pool.query(
+          `UPDATE posts SET status = 'published', permalink = ?, platform_post_id = ?, published_at = NOW() WHERE id = ?`,
+          [result.permalink, result.platformPostId, post.id],
+        );
+      } else if (post.platform === 'instagram') {
+        const result = await publishToInstagram(post.user_id, post.caption ?? '', post.media_urls ?? [], post.post_type);
+        await pool.query(
+          `UPDATE posts SET status = 'published', permalink = ?, platform_post_id = ?, published_at = NOW() WHERE id = ?`,
+          [result.permalink, result.platformPostId, post.id],
+        );
+      } else {
+        // Platform not yet supported for scheduled publishing — skip without failing
+        console.warn(`[cron] unsupported platform '${post.platform}' for post ${post.id} — skipping`);
+        continue;
+      }
+      console.log(`[cron] published post ${post.id} (${post.platform})`);
+      succeeded++;
+    } catch (err) {
+      console.error(`[cron] failed to publish post ${post.id} (${post.platform}):`, err);
+      await pool.query(`UPDATE posts SET status = 'failed' WHERE id = ?`, [post.id]);
+      failed++;
+    }
+  }
+
+  return { processed: rows.length, succeeded, failed };
 }
 
 // ─── Metrics ─────────────────────────────────────────────────────────────────

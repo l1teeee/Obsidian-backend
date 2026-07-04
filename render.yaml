@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: obsidian-backend
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - fromGroup: obsidian-backend-env
+
+  - type: cron
+    name: publish-scheduled-posts
+    runtime: node
+    schedule: "* * * * *"
+    buildCommand: npm install && npm run build
+    startCommand: node dist/jobs/publish-scheduled.js
+    envVars:
+      - fromGroup: obsidian-backend-env
