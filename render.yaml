@@ -7,11 +7,22 @@ services:
     envVars:
       - fromGroup: obsidian-backend-env
 
+  # Publishes posts whose scheduled_at <= NOW(). Runs every minute.
   - type: cron
     name: publish-scheduled-posts
     runtime: node
     schedule: "* * * * *"
     buildCommand: npm install && npm run build
     startCommand: node dist/jobs/publish-scheduled.js
+    envVars:
+      - fromGroup: obsidian-backend-env
+
+  # Refreshes expiring OAuth tokens (daily) + cleans up stale auth data (weekly).
+  - type: cron
+    name: maintenance
+    runtime: node
+    schedule: "*/15 * * * *"
+    buildCommand: npm install && npm run build
+    startCommand: node dist/jobs/maintenance.js
     envVars:
       - fromGroup: obsidian-backend-env
