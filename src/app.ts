@@ -73,7 +73,7 @@ export function buildApp() {
 
   // ── CORS ──────────────────────────────────────────────────────────────────
   fastify.register(cors, {
-    origin:      env.CORS_ORIGINS.split(',').map(o => o.trim()),
+    origin:      env.CORS_ORIGINS.split(',').map(o => o.trim().replace(/\/$/, '')).filter(Boolean),
     credentials: true,
     methods:     ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
