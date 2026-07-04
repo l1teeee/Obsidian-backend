@@ -58,6 +58,11 @@ export const env = {
   // Base public URL for S3 objects — use CloudFront URL if CDN is configured,
   // otherwise the default S3 URL: https://{bucket}.s3.{region}.amazonaws.com
   S3_PUBLIC_URL:         required('S3_PUBLIC_URL'),
+  // PayPal — leave blank to skip webhook signature verification in development
+  PAYPAL_CLIENT_ID:     process.env['PAYPAL_CLIENT_ID']     ?? '',
+  PAYPAL_CLIENT_SECRET: process.env['PAYPAL_CLIENT_SECRET'] ?? '',
+  PAYPAL_WEBHOOK_ID:    process.env['PAYPAL_WEBHOOK_ID']    ?? '',
+  PAYPAL_API_BASE:      process.env['PAYPAL_API_BASE']      ?? 'https://api-m.sandbox.paypal.com',
 } as const;
 
 // ── Secret strength validation ─────────────────────────────────────────────────

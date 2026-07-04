@@ -1,0 +1,167 @@
+import { ResultSetHeader } from 'mysql2';
+import { pool } from '../../config/db';
+import { env } from '../../config/env';
+
+interface PaypalTokenResponse {
+  access_token: string;
+}
+
+interface PaypalSubscriptionResponse {
+  status: string;
+}
+
+interface PaypalVerifyResponse {
+  verification_status: string;
+}
+
+async function getAccessToken(): Promise<string> {
+  const creds = Buffer.from(`${env.PAYPAL_CLIENT_ID}:${env.PAYPAL_CLIENT_SECRET}`).toString('base64');
+  const res = await fetch(`${env.PAYPAL_API_BASE}/v1/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      Authorization:  `Basic ${creds}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'grant_type=client_credentials',
+  });
+
+  if (!res.ok) {
+    throw Object.assign(new Error('Failed to obtain PayPal access token'), {
+      statusCode: 502,
+      errorCode:  'PAYPAL_AUTH_FAILED',
+    });
+  }
+
+  const data = await res.json() as PaypalTokenResponse;
+  return data.access_token;
+}
+
+export async function confirmSubscription(
+  userId:         string,
+  subscriptionId: string,
+  planId:         string,
+): Promise<void> {
+  const token = await getAccessToken();
+
+  const res = await fetch(
+    `${env.PAYPAL_API_BASE}/v1/billing/subscriptions/${encodeURIComponent(subscriptionId)}`,
+    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } },
+  );
+
+  if (!res.ok) {
+    throw Object.assign(new Error('Could not verify subscription with PayPal'), {
+      statusCode: 422,
+      errorCode:  'SUBSCRIPTION_VERIFY_FAILED',
+    });
+  }
+
+  const sub = await res.json() as PaypalSubscriptionResponse;
+
+  // APPROVAL_PENDING is acceptable: PayPal may not have activated it yet
+  if (!['ACTIVE', 'APPROVAL_PENDING'].includes(sub.status)) {
+    throw Object.assign(new Error(`Subscription is not active (status: ${sub.status})`), {
+      statusCode: 422,
+      errorCode:  'SUBSCRIPTION_NOT_ACTIVE',
+    });
+  }
+
+  await pool.query<ResultSetHeader>(
+    `UPDATE users
+        SET paypal_subscription_id = ?,
+            plan                   = ?,
+            plan_status            = 'active'
+      WHERE id = ?`,
+    [subscriptionId, planId, userId],
+  );
+}
+
+interface WebhookHeaders {
+  transmissionId:   string;
+  transmissionTime: string;
+  certUrl:          string;
+  authAlgo:         string;
+  transmissionSig:  string;
+}
+
+export async function handleWebhook(
+  headers: WebhookHeaders,
+  event:   Record<string, unknown>,
+): Promise<void> {
+  // Verify signature only when PAYPAL_WEBHOOK_ID is configured.
+  // Leave it blank during local development to skip verification.
+  if (env.PAYPAL_WEBHOOK_ID) {
+    const token = await getAccessToken();
+
+    const verifyRes = await fetch(
+      `${env.PAYPAL_API_BASE}/v1/notifications/verify-webhook-signature`,
+      {
+        method:  'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transmission_id:   headers.transmissionId,
+          transmission_time: headers.transmissionTime,
+          cert_url:          headers.certUrl,
+          auth_algo:         headers.authAlgo,
+          transmission_sig:  headers.transmissionSig,
+          webhook_id:        env.PAYPAL_WEBHOOK_ID,
+          webhook_event:     event,
+        }),
+      },
+    );
+
+    if (!verifyRes.ok) {
+      throw Object.assign(new Error('PayPal signature verification request failed'), {
+        statusCode: 401,
+        errorCode:  'INVALID_SIGNATURE',
+      });
+    }
+
+    const result = await verifyRes.json() as PaypalVerifyResponse;
+    if (result.verification_status !== 'SUCCESS') {
+      throw Object.assign(new Error('Invalid webhook signature'), {
+        statusCode: 401,
+        errorCode:  'INVALID_SIGNATURE',
+      });
+    }
+  }
+
+  const eventType = (event['event_type'] as string) ?? '';
+  const resource  = (event['resource']   as Record<string, unknown>) ?? {};
+  const subId     = resource['id'] as string | undefined;
+
+  if (!subId) return;
+
+  switch (eventType) {
+    case 'BILLING.SUBSCRIPTION.ACTIVATED':
+      await pool.query<ResultSetHeader>(
+        `UPDATE users SET plan_status = 'active' WHERE paypal_subscription_id = ?`,
+        [subId],
+      );
+      break;
+
+    case 'BILLING.SUBSCRIPTION.CANCELLED':
+      await pool.query<ResultSetHeader>(
+        `UPDATE users SET plan_status = 'cancelled', plan = 'starter' WHERE paypal_subscription_id = ?`,
+        [subId],
+      );
+      break;
+
+    case 'BILLING.SUBSCRIPTION.EXPIRED':
+      await pool.query<ResultSetHeader>(
+        `UPDATE users SET plan_status = 'expired', plan = 'starter' WHERE paypal_subscription_id = ?`,
+        [subId],
+      );
+      break;
+
+    case 'BILLING.SUBSCRIPTION.SUSPENDED':
+      await pool.query<ResultSetHeader>(
+        `UPDATE users SET plan_status = 'suspended' WHERE paypal_subscription_id = ?`,
+        [subId],
+      );
+      break;
+
+    default:
+      // Unhandled event type — acknowledge receipt, take no action
+      break;
+  }
+}
