@@ -20,11 +20,7 @@ function optionalInt(name: string, fallback: number): number {
 
 export const env = {
   PORT:               optionalInt('PORT', 3000),
-  DB_HOST:            required('DB_HOST'),
-  DB_PORT:            optionalInt('DB_PORT', 3306),
-  DB_USER:            required('DB_USER'),
-  DB_PASSWORD:        process.env['DB_PASSWORD'] ?? '',
-  DB_NAME:            required('DB_NAME'),
+  DATABASE_URL:       required('DATABASE_URL'),
   JWT_SECRET:         required('JWT_SECRET'),
   JWT_REFRESH_SECRET: required('JWT_REFRESH_SECRET'),
   BCRYPT_ROUNDS:      optionalInt('BCRYPT_ROUNDS', 10),

@@ -18,7 +18,7 @@ REST API for the Vielinks social media management platform. Built with Fastify, 
 ### Prerequisites
 
 - Node.js 20+
-- MySQL 8 instance (local or tunneled to production)
+- Railway MySQL database
 - AWS S3 bucket with a lifecycle rule on `temp/` prefix (7-day expiry)
 - OpenAI API key
 
@@ -37,11 +37,7 @@ Create a `.env` file in the project root:
 PORT=3000
 
 # Database
-DB_HOST=127.0.0.1
-DB_PORT=3307          # 3307 if using SSH tunnel to production, 3306 for local
-DB_USER=your_db_user
-DB_PASSWORD=your_db_password
-DB_NAME=your_db_name
+DATABASE_URL=mysql://root:PASSWORD@hayabusa.proxy.rlwy.net:23300/railway
 
 # JWT — minimum 32 characters each
 JWT_SECRET=your_jwt_secret_min_32_chars
@@ -85,19 +81,15 @@ COOKIE_DOMAIN=
 
 ### Development
 
-The dev server connects to the production database by default. If the database is on a remote server, open an SSH tunnel first:
-
-```bash
-ssh -i "path/to/key.pem" -N -L 3307:127.0.0.1:3306 ubuntu@your-server-ip
-```
-
-Then start the server:
+The dev server connects to the Railway MySQL database configured in `DATABASE_URL`.
 
 ```bash
 npm run dev
 ```
 
 ### Production build
+
+Render uses the Node.js version declared in `package.json`.
 
 ```bash
 npm run build
