@@ -1,3 +1,4 @@
+/// <reference path="./types/fastify.d.ts" />
 import { randomUUID }   from 'crypto';
 import Fastify, { FastifyError } from 'fastify';
 import cors        from '@fastify/cors';
