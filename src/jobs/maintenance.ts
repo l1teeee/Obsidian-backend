@@ -2,6 +2,7 @@ import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { pool } from '../config/db';
 import { extendToken } from '../modules/platforms/platforms.service';
 import { encryptToken, decryptToken } from '../lib/crypto';
+import { sendTrialEndingSoonEmail, sendTrialExpiredEmail } from '../lib/email';
 
 // ─── Scheduling helpers ───────────────────────────────────────────────────────
 
@@ -132,6 +133,69 @@ async function cleanupAuth(): Promise<void> {
   );
 }
 
+// ─── Task 3: trial reminder / expiry emails (daily) ──────────────────────────
+
+interface TrialUserRow extends RowDataPacket {
+  id:            string;
+  email:         string;
+  name:          string | null;
+  trial_ends_at: Date;
+}
+
+async function sendTrialEmails(): Promise<void> {
+  let reminders   = 0;
+  let expirations = 0;
+
+  // Reminder: trial ends within 3 days. plan_status = 'trialing' excludes
+  // anyone who already subscribed (confirm/webhook set it to 'active').
+  const [ending] = await pool.query<TrialUserRow[]>(
+    `SELECT id, email, name, trial_ends_at
+       FROM users
+      WHERE plan_status = 'trialing'
+        AND is_admin = 0
+        AND email_verified = 1
+        AND trial_ends_at BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 3 DAY)
+        AND trial_reminder_sent = 0`,
+  );
+  for (const user of ending) {
+    try {
+      const daysLeft = Math.max(1, Math.ceil((user.trial_ends_at.getTime() - Date.now()) / DAY));
+      await sendTrialEndingSoonEmail(user.email, {
+        ...(user.name && { name: user.name }),
+        daysLeft,
+      });
+      await pool.query('UPDATE users SET trial_reminder_sent = 1 WHERE id = ?', [user.id]);
+      reminders++;
+    } catch (err) {
+      // Flag stays 0 — retried on the next daily run
+      console.error(`[maintenance] trial reminder failed for ${user.id}:`, (err as Error).message);
+    }
+  }
+
+  const [expired] = await pool.query<TrialUserRow[]>(
+    `SELECT id, email, name, trial_ends_at
+       FROM users
+      WHERE plan_status = 'trialing'
+        AND is_admin = 0
+        AND email_verified = 1
+        AND trial_ends_at < NOW()
+        AND trial_expired_notified = 0`,
+  );
+  for (const user of expired) {
+    try {
+      await sendTrialExpiredEmail(user.email, {
+        ...(user.name && { name: user.name }),
+      });
+      await pool.query('UPDATE users SET trial_expired_notified = 1 WHERE id = ?', [user.id]);
+      expirations++;
+    } catch (err) {
+      console.error(`[maintenance] trial expiry email failed for ${user.id}:`, (err as Error).message);
+    }
+  }
+
+  console.log(`[maintenance] trial emails: ${reminders} reminders, ${expirations} expirations`);
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -144,6 +208,10 @@ async function main(): Promise<void> {
     if (await isDue('cleanup-auth', WEEK)) {
       await cleanupAuth();
       await markDone('cleanup-auth');
+    }
+    if (await isDue('trial-emails', DAY)) {
+      await sendTrialEmails();
+      await markDone('trial-emails');
     }
   } catch (err) {
     console.error('[maintenance] fatal:', err);

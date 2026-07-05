@@ -11,6 +11,8 @@ import { PostStatusChanged }    from './emails/PostStatusChanged';
 import { AccountStatusChanged } from './emails/AccountStatusChanged';
 import { ProfileUpdated }        from './emails/ProfileUpdated';
 import { AdminInvite }          from './emails/AdminInvite';
+import { TrialEndingSoon }      from './emails/TrialEndingSoon';
+import { TrialExpired }         from './emails/TrialExpired';
 
 const brevo = new BrevoClient({
   apiKey:      env.BREVO_API_KEY,
@@ -170,4 +172,29 @@ export async function sendPlatformConnectedEmail(
   } catch (err) {
     console.error('[EMAIL] platform connected email error:', err);
   }
+}
+
+// Unlike the senders above, trial emails THROW on failure: the maintenance
+// cron only marks a user as notified when the send actually succeeded.
+export async function sendTrialEndingSoonEmail(
+  toEmail: string,
+  opts: { name?: string; daysLeft: number },
+): Promise<void> {
+  const subscribeUrl = `${env.FRONTEND_URL}/settings`;
+  const html = await render(
+    React.createElement(TrialEndingSoon, { ...opts, subscribeUrl }),
+  );
+  const dayWord = opts.daysLeft === 1 ? 'day' : 'days';
+  await send(toEmail, `Your Vielink trial ends in ${opts.daysLeft} ${dayWord}`, html);
+}
+
+export async function sendTrialExpiredEmail(
+  toEmail: string,
+  opts: { name?: string },
+): Promise<void> {
+  const subscribeUrl = `${env.FRONTEND_URL}/settings`;
+  const html = await render(
+    React.createElement(TrialExpired, { ...opts, subscribeUrl }),
+  );
+  await send(toEmail, 'Your Vielink free trial has ended', html);
 }
