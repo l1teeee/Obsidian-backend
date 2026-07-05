@@ -3,7 +3,6 @@ import {
   getMeHandler,
   completeProfileHandler,
   updateProfileHandler,
-  updatePlanHandler,
   getPlatformsHandler,
   getActivityHandler,
   getAllActivityHandler,
@@ -37,17 +36,6 @@ const updateProfileSchema = {
   },
 };
 
-const updatePlanSchema = {
-  body: {
-    type: 'object',
-    required: ['plan'],
-    additionalProperties: false,
-    properties: {
-      plan: { type: 'string', enum: ['starter', 'pro', 'enterprise'] },
-    },
-  },
-};
-
 const updateAvatarSchema = {
   body: {
     type: 'object',
@@ -67,7 +55,6 @@ const usersRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/me',        { config: { rateLimit: USERS_LIMIT } },                              getMeHandler);
   fastify.put('/me',        { schema: completeProfileSchema, config: { rateLimit: USERS_LIMIT } }, completeProfileHandler);
   fastify.patch('/me',      { schema: updateProfileSchema,   config: { rateLimit: USERS_LIMIT } }, updateProfileHandler);
-  fastify.patch('/me/plan',      { schema: updatePlanSchema, config: { rateLimit: USERS_LIMIT } }, updatePlanHandler);
   fastify.get('/me/platforms',       { config: { rateLimit: USERS_LIMIT } }, getPlatformsHandler);
   fastify.get('/me/activity',        { config: { rateLimit: USERS_LIMIT } }, getActivityHandler);
   fastify.get('/me/activity/all',    { config: { rateLimit: USERS_LIMIT } }, getAllActivityHandler);

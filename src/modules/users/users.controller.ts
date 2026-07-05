@@ -5,7 +5,6 @@ import { checkTokenLimit } from '../admin/token.service';
 
 type CompleteProfileBody   = { name: string; role: string; country: string };
 type UpdateProfileBody     = { name?: string; role?: string; country?: string };
-type UpdatePlanBody        = { plan: usersService.UserPlan };
 type UpdateAvatarBody      = { avatar_url: string };
 
 export async function getMeHandler(
@@ -35,14 +34,6 @@ export async function updateProfileHandler(
     void sendProfileUpdatedEmail(profile.email, { name: profile.name ?? undefined, updatedFields });
   }
   reply.send({ success: true, data: profile });
-}
-
-export async function updatePlanHandler(
-  request: FastifyRequest<{ Body: UpdatePlanBody }>,
-  reply:   FastifyReply,
-): Promise<void> {
-  await usersService.updatePlan(request.user.id, request.body.plan);
-  reply.send({ success: true, data: null });
 }
 
 export async function getPlatformsHandler(

@@ -77,13 +77,6 @@ export async function updateAvatar(userId: string, avatarUrl: string): Promise<v
   await pool.query('UPDATE users SET avatar_url = ? WHERE id = ?', [avatarUrl, userId]);
 }
 
-export async function updatePlan(userId: string, plan: UserPlan): Promise<void> {
-  if (!['free', 'starter', 'pro', 'enterprise'].includes(plan)) {
-    throw appError('INVALID_PLAN', 'Invalid plan', 400);
-  }
-  await pool.query('UPDATE users SET plan = ? WHERE id = ?', [plan, userId]);
-}
-
 // ─── Platform connections (all workspaces) ────────────────────────────────────
 
 export interface PlatformConnectionSummary {

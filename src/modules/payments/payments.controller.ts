@@ -3,7 +3,6 @@ import * as paymentsService from './payments.service';
 
 type ConfirmSubscriptionBody = {
   subscriptionId: string;
-  planId:         string;
 };
 
 export async function confirmSubscriptionHandler(
@@ -12,7 +11,7 @@ export async function confirmSubscriptionHandler(
 ): Promise<void> {
   const userId = (request.user as { id: string }).id;
   const body   = request.body as ConfirmSubscriptionBody;
-  await paymentsService.confirmSubscription(userId, body.subscriptionId, body.planId);
+  await paymentsService.confirmSubscription(userId, body.subscriptionId);
   reply.send({ success: true, data: null });
 }
 

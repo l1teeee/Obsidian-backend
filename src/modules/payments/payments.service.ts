@@ -1,17 +1,30 @@
 import { ResultSetHeader } from 'mysql2';
 import { pool } from '../../config/db';
 import { env } from '../../config/env';
+import { PlanName } from '../../config/plans';
 
 interface PaypalTokenResponse {
   access_token: string;
 }
 
 interface PaypalSubscriptionResponse {
-  status: string;
+  status:        string;
+  plan_id?:      string;
+  billing_info?: { next_billing_time?: string };
 }
 
 interface PaypalVerifyResponse {
   verification_status: string;
+}
+
+function paypalPlanToTier(paypalPlanId: string): PlanName | null {
+  if (!paypalPlanId) return null;
+  const map: Record<string, PlanName | undefined> = {
+    [env.PAYPAL_PLAN_ID_STARTER]:    'starter',
+    [env.PAYPAL_PLAN_ID_PRO]:        'pro',
+    [env.PAYPAL_PLAN_ID_ENTERPRISE]: 'enterprise',
+  };
+  return map[paypalPlanId] ?? null;
 }
 
 async function getAccessToken(): Promise<string> {
@@ -39,7 +52,6 @@ async function getAccessToken(): Promise<string> {
 export async function confirmSubscription(
   userId:         string,
   subscriptionId: string,
-  planId:         string,
 ): Promise<void> {
   const token = await getAccessToken();
 
@@ -65,13 +77,27 @@ export async function confirmSubscription(
     });
   }
 
+  // Map the plan_id reported by PayPal — never the one claimed by the client
+  const plan = paypalPlanToTier(sub.plan_id ?? '');
+  if (!plan) {
+    throw Object.assign(new Error('PayPal plan does not match any known tier'), {
+      statusCode: 422,
+      errorCode:  'UNKNOWN_PAYPAL_PLAN',
+    });
+  }
+
+  const paidUntil = sub.billing_info?.next_billing_time
+    ? new Date(sub.billing_info.next_billing_time)
+    : null;
+
   await pool.query<ResultSetHeader>(
     `UPDATE users
         SET paypal_subscription_id = ?,
             plan                   = ?,
-            plan_status            = 'active'
+            plan_status            = 'active',
+            paid_until             = ?
       WHERE id = ?`,
-    [subscriptionId, planId, userId],
+    [subscriptionId, plan, paidUntil, userId],
   );
 }
 
@@ -132,23 +158,36 @@ export async function handleWebhook(
   if (!subId) return;
 
   switch (eventType) {
-    case 'BILLING.SUBSCRIPTION.ACTIVATED':
+    case 'BILLING.SUBSCRIPTION.ACTIVATED': {
+      const billing = resource['billing_info'] as { next_billing_time?: string } | undefined;
+      const plan    = paypalPlanToTier((resource['plan_id'] as string) ?? '');
       await pool.query<ResultSetHeader>(
-        `UPDATE users SET plan_status = 'active' WHERE paypal_subscription_id = ?`,
-        [subId],
+        `UPDATE users
+            SET plan_status = 'active',
+                plan        = COALESCE(?, plan),
+                paid_until  = COALESCE(?, paid_until)
+          WHERE paypal_subscription_id = ?`,
+        [plan, billing?.next_billing_time ? new Date(billing.next_billing_time) : null, subId],
       );
       break;
+    }
 
-    case 'BILLING.SUBSCRIPTION.CANCELLED':
+    case 'BILLING.SUBSCRIPTION.CANCELLED': {
+      // Access continues until the end of the already-paid period (paid_until)
+      const billing = resource['billing_info'] as { next_billing_time?: string } | undefined;
       await pool.query<ResultSetHeader>(
-        `UPDATE users SET plan_status = 'cancelled', plan = 'starter' WHERE paypal_subscription_id = ?`,
-        [subId],
+        `UPDATE users
+            SET plan_status = 'cancelled',
+                paid_until  = COALESCE(?, paid_until)
+          WHERE paypal_subscription_id = ?`,
+        [billing?.next_billing_time ? new Date(billing.next_billing_time) : null, subId],
       );
       break;
+    }
 
     case 'BILLING.SUBSCRIPTION.EXPIRED':
       await pool.query<ResultSetHeader>(
-        `UPDATE users SET plan_status = 'expired', plan = 'starter' WHERE paypal_subscription_id = ?`,
+        `UPDATE users SET plan_status = 'expired', plan = NULL WHERE paypal_subscription_id = ?`,
         [subId],
       );
       break;

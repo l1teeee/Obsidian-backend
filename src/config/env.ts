@@ -59,6 +59,11 @@ export const env = {
   PAYPAL_CLIENT_SECRET: process.env['PAYPAL_CLIENT_SECRET'] ?? '',
   PAYPAL_WEBHOOK_ID:    process.env['PAYPAL_WEBHOOK_ID']    ?? '',
   PAYPAL_API_BASE:      process.env['PAYPAL_API_BASE']      ?? 'https://api-m.sandbox.paypal.com',
+  // PayPal billing plan IDs (from the PayPal dashboard) — server-side mapping to internal tiers.
+  // Never trust a tier name sent by the client.
+  PAYPAL_PLAN_ID_STARTER:    process.env['PAYPAL_PLAN_ID_STARTER']    ?? '',
+  PAYPAL_PLAN_ID_PRO:        process.env['PAYPAL_PLAN_ID_PRO']        ?? '',
+  PAYPAL_PLAN_ID_ENTERPRISE: process.env['PAYPAL_PLAN_ID_ENTERPRISE'] ?? '',
 } as const;
 
 // ── Secret strength validation ─────────────────────────────────────────────────
