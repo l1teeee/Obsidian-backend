@@ -30,7 +30,7 @@
 **Interfaces:**
 - Produces: columnas `users.trial_ends_at DATETIME NULL`, `users.paid_until DATETIME NULL`, `users.trial_reminder_sent TINYINT(1) DEFAULT 0`, `users.trial_expired_notified TINYINT(1) DEFAULT 0`, y valor `'trialing'` aceptado en `users.plan_status`. Todas las tasks siguientes asumen que existen.
 
-- [ ] **Step 1: Pedir al usuario que aplique la migración**
+- [x] **Step 1: Pedir al usuario que aplique la migración**
 
 Este paso es **bloqueante**: entregar el SQL al usuario y esperar su confirmación de que lo aplicó. Antes, comprobar el tipo de `plan_status`:
 
@@ -60,7 +60,7 @@ UPDATE users
    AND trial_ends_at IS NULL;
 ```
 
-- [ ] **Step 2: Verificar que las columnas existen**
+- [x] **Step 2: Verificar que las columnas existen**
 
 ```bash
 npx tsx -e "
@@ -93,7 +93,7 @@ Expected: imprime los 4 nombres y exit 0. Si falla, volver al Step 1 — **no co
   - `SubscriptionFields = { plan: string|null; plan_status: string|null; trial_ends_at: Date|null; paid_until: Date|null; is_admin: number }`.
   - `SubscriptionState = { status: 'trialing'|'active'|'cancelled'|'blocked'; plan: PlanName|null; effectivePlan: PlanName|null; trialEndsAt: Date|null; trialDaysLeft: number|null; paidUntil: Date|null }`.
 
-- [ ] **Step 1: Instalar vitest y añadir script**
+- [x] **Step 1: Instalar vitest y añadir script**
 
 ```bash
 npm install -D vitest
@@ -105,7 +105,7 @@ En `package.json`, añadir a `scripts`:
 "test": "vitest run"
 ```
 
-- [ ] **Step 2: Crear `src/config/plans.ts`**
+- [x] **Step 2: Crear `src/config/plans.ts`**
 
 ```ts
 // Single source of truth for plan tiers and their limits.
@@ -135,7 +135,7 @@ export function isPlanName(value: unknown): value is PlanName {
 }
 ```
 
-- [ ] **Step 3: Escribir el test que falla** — `src/modules/payments/subscription-state.test.ts`
+- [x] **Step 3: Escribir el test que falla** — `src/modules/payments/subscription-state.test.ts`
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -220,7 +220,7 @@ describe('deriveSubscriptionState', () => {
 });
 ```
 
-- [ ] **Step 4: Verificar que falla**
+- [x] **Step 4: Verificar que falla**
 
 ```bash
 npm test
@@ -228,7 +228,7 @@ npm test
 
 Expected: FAIL — `Cannot find module './subscription-state'` (o similar).
 
-- [ ] **Step 5: Implementar `src/modules/payments/subscription-state.ts`**
+- [x] **Step 5: Implementar `src/modules/payments/subscription-state.ts`**
 
 **IMPORTANTE:** este archivo NO debe importar `db`, `env` ni nada que los importe — solo `config/plans`.
 
@@ -296,7 +296,7 @@ export function deriveSubscriptionState(
 }
 ```
 
-- [ ] **Step 6: Verificar que pasa**
+- [x] **Step 6: Verificar que pasa**
 
 ```bash
 npm test && npx tsc --noEmit
@@ -304,7 +304,7 @@ npm test && npx tsc --noEmit
 
 Expected: 10 tests PASS, tsc sin errores.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/config/plans.ts src/modules/payments/subscription-state.ts src/modules/payments/subscription-state.test.ts package.json package-lock.json
@@ -330,7 +330,7 @@ git commit -m "feat: plan tiers config and pure subscription state derivation"
   - `getSubscriptionState(userId: string): Promise<SubscriptionState>` en `subscriptions.service.ts` (lanza `404 USER_NOT_FOUND` si el usuario no existe).
   - Decorador `fastify.requireSubscription(request, reply): Promise<void>` y `request.subscription?: SubscriptionState`.
 
-- [ ] **Step 1: Crear `src/modules/payments/subscriptions.service.ts`**
+- [x] **Step 1: Crear `src/modules/payments/subscriptions.service.ts`**
 
 ```ts
 import { RowDataPacket } from 'mysql2';
@@ -358,7 +358,7 @@ export async function getSubscriptionState(userId: string): Promise<Subscription
 }
 ```
 
-- [ ] **Step 2: Crear `src/plugins/subscription.plugin.ts`**
+- [x] **Step 2: Crear `src/plugins/subscription.plugin.ts`**
 
 ```ts
 import fp from 'fastify-plugin';
@@ -388,7 +388,7 @@ const subscriptionPlugin: FastifyPluginAsync = async (fastify) => {
 export default fp(subscriptionPlugin);
 ```
 
-- [ ] **Step 3: Ampliar `src/types/fastify.d.ts`**
+- [x] **Step 3: Ampliar `src/types/fastify.d.ts`**
 
 Archivo completo resultante:
 
@@ -416,7 +416,7 @@ declare module 'fastify' {
 }
 ```
 
-- [ ] **Step 4: Registrar el plugin en `src/app.ts`**
+- [x] **Step 4: Registrar el plugin en `src/app.ts`**
 
 Añadir el import junto a los demás plugins:
 
@@ -431,7 +431,7 @@ fastify.register(authenticatePlugin);
 fastify.register(subscriptionPlugin);
 ```
 
-- [ ] **Step 5: Cablear los 7 módulos protegidos**
+- [x] **Step 5: Cablear los 7 módulos protegidos**
 
 En módulos con hook de instancia (`posts`, `ai-settings`, `media`, `workspaces`), añadir la línea **inmediatamente después** de `fastify.addHook('preHandler', fastify.authenticate);`:
 
@@ -455,7 +455,7 @@ fastify.addHook('preHandler', fastify.requireSubscription);
 
 Los callbacks OAuth de platforms no llevan `authenticate`, así que `request.user` es `undefined` y el decorador los deja pasar (por diseño, ver Step 2).
 
-- [ ] **Step 6: Verificar**
+- [x] **Step 6: Verificar**
 
 ```bash
 npx tsc --noEmit && npm test
@@ -481,7 +481,7 @@ curl -s http://localhost:3000/users/me -H "Authorization: Bearer $TOKEN" | head 
 # 4. Restaurar: UPDATE users SET trial_ends_at = NOW() + INTERVAL 14 DAY WHERE email = '<test>';
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/modules/payments/subscriptions.service.ts src/plugins/subscription.plugin.ts src/types/fastify.d.ts src/app.ts src/modules/posts/posts.routes.ts src/modules/ai/ai.routes.ts src/modules/ai-settings/ai-settings.routes.ts src/modules/media/media.routes.ts src/modules/workspaces/workspaces.routes.ts src/modules/platforms/platforms.routes.ts src/modules/metrics/metrics.routes.ts
@@ -506,7 +506,7 @@ git commit -m "feat: subscription paywall — requireSubscription decorator wire
   - `confirmSubscription(userId: string, subscriptionId: string): Promise<void>` — **firma nueva, sin `planId`**.
   - `PaypalSubscriptionResponse` con `plan_id` y `billing_info.next_billing_time` (lo reutiliza Task 5).
 
-- [ ] **Step 1: Añadir env vars en `src/config/env.ts`**
+- [x] **Step 1: Añadir env vars en `src/config/env.ts`**
 
 Tras la línea de `PAYPAL_API_BASE`:
 
@@ -518,7 +518,7 @@ Tras la línea de `PAYPAL_API_BASE`:
   PAYPAL_PLAN_ID_ENTERPRISE: process.env['PAYPAL_PLAN_ID_ENTERPRISE'] ?? '',
 ```
 
-- [ ] **Step 2: Reescribir `confirmSubscription` en `payments.service.ts`**
+- [x] **Step 2: Reescribir `confirmSubscription` en `payments.service.ts`**
 
 Ampliar la interfaz existente y añadir el mapeo:
 
@@ -598,7 +598,7 @@ export async function confirmSubscription(
 }
 ```
 
-- [ ] **Step 3: Corregir el `switch` del webhook en `handleWebhook`**
+- [x] **Step 3: Corregir el `switch` del webhook en `handleWebhook`**
 
 Reemplazar los cases por:
 
@@ -653,7 +653,7 @@ Reemplazar los cases por:
 
 (El case `CANCELLED` original hacía `plan = 'starter'` — regalaba un tier de pago. El `EXPIRED` original también.)
 
-- [ ] **Step 4: Actualizar schema y controller**
+- [x] **Step 4: Actualizar schema y controller**
 
 `payments.schema.ts` — el body ya no lleva `planId` (el enum viejo incluía `'studio'`, que ni existe como tier):
 
@@ -690,7 +690,7 @@ export async function confirmSubscriptionHandler(
 
 **Nota frontend:** si el cliente enviaba `planId`, con `additionalProperties: false` ahora recibiría 400. El frontend aún no está integrado (datos mockeados), así que no rompe nada — pero documentarlo en el mensaje de commit.
 
-- [ ] **Step 5: Eliminar `PATCH /users/me/plan` (auto-asignación de plan)**
+- [x] **Step 5: Eliminar `PATCH /users/me/plan` (auto-asignación de plan)**
 
 El endpoint permite a cualquier usuario ponerse `plan = 'enterprise'` sin pagar. Con el nuevo modelo, `users.plan` solo lo escriben los flujos verificados con PayPal (confirm/webhook). Eliminar:
 
@@ -707,7 +707,7 @@ grep -rn "updatePlan\|me/plan" src/
 
 Expected: sin resultados.
 
-- [ ] **Step 6: Verificar y commit**
+- [x] **Step 6: Verificar y commit**
 
 ```bash
 npx tsc --noEmit && npm test
@@ -732,7 +732,7 @@ BREAKING: POST /payments/paypal/subscription no longer accepts planId in the bod
 - Consumes: `getSubscriptionState` (Task 3), `PLANS` (Task 2), `PaypalSubscriptionResponse`, `getAccessToken` (Task 4).
 - Produces: `cancelSubscription(userId: string): Promise<void>`.
 
-- [ ] **Step 1: Añadir `cancelSubscription` a `payments.service.ts`**
+- [x] **Step 1: Añadir `cancelSubscription` a `payments.service.ts`**
 
 ```ts
 interface SubIdRow extends RowDataPacket {
@@ -797,7 +797,7 @@ export async function cancelSubscription(userId: string): Promise<void> {
 
 (Import necesario: `RowDataPacket` desde `mysql2` — ampliar el import existente de `ResultSetHeader`. Nota: el spec listaba "update → cancel"; aquí se cancela primero en PayPal deliberadamente para no marcar cancelado a alguien a quien PayPal seguiría cobrando. El webhook `CANCELLED` posterior es idempotente con este UPDATE.)
 
-- [ ] **Step 2: Añadir handlers en `payments.controller.ts`**
+- [x] **Step 2: Añadir handlers en `payments.controller.ts`**
 
 ```ts
 import { getSubscriptionState } from './subscriptions.service';
@@ -842,7 +842,7 @@ export async function cancelSubscriptionHandler(
 }
 ```
 
-- [ ] **Step 3: Añadir rutas en `payments.routes.ts`**
+- [x] **Step 3: Añadir rutas en `payments.routes.ts`**
 
 ```ts
   fastify.get('/subscription', {
@@ -858,7 +858,7 @@ export async function cancelSubscriptionHandler(
 
 (Sin `requireSubscription` a propósito: un usuario bloqueado debe poder consultar su estado y pagar.)
 
-- [ ] **Step 4: Verificar**
+- [x] **Step 4: Verificar**
 
 ```bash
 npx tsc --noEmit && npm test
@@ -871,7 +871,7 @@ curl -s http://localhost:3000/payments/subscription -H "Authorization: Bearer $T
 # Expected: {"success":true,"data":{"status":"trialing","effectivePlan":"pro","trialDaysLeft":<n>,...,"limits":{...}}}
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/modules/payments/payments.service.ts src/modules/payments/payments.controller.ts src/modules/payments/payments.routes.ts
@@ -888,7 +888,7 @@ git commit -m "feat: subscription status endpoint and PayPal cancellation with p
 **Interfaces:**
 - Consumes: `PLANS`, `TRIAL_PLAN`, `TRIAL_DAYS`, `isPlanName` (Task 2).
 
-- [ ] **Step 1: Iniciar el trial en el registro normal**
+- [x] **Step 1: Iniciar el trial en el registro normal**
 
 En `register()` (~línea 119), reemplazar el INSERT:
 
@@ -900,7 +900,7 @@ En `register()` (~línea 119), reemplazar el INSERT:
   );
 ```
 
-- [ ] **Step 2: Iniciar el trial en el registro vía Google**
+- [x] **Step 2: Iniciar el trial en el registro vía Google**
 
 En `googleAuth` (~línea 367), reemplazar el INSERT de usuario nuevo:
 
@@ -912,7 +912,7 @@ En `googleAuth` (~línea 367), reemplazar el INSERT de usuario nuevo:
     );
 ```
 
-- [ ] **Step 3: Sesiones desde `plans.ts`**
+- [x] **Step 3: Sesiones desde `plans.ts`**
 
 Eliminar el bloque `PLAN_SESSION_LIMITS` (líneas 13-18) y añadir el import:
 
@@ -929,7 +929,7 @@ Reemplazar la línea `const maxSessions = user.max_sessions ?? PLAN_SESSION_LIMI
   const maxSessions  = user.max_sessions ?? planSessions;
 ```
 
-- [ ] **Step 4: Verificar**
+- [x] **Step 4: Verificar**
 
 ```bash
 npx tsc --noEmit && npm test
@@ -937,7 +937,7 @@ npx tsc --noEmit && npm test
 
 Funcional: registrar un usuario nuevo y comprobar en BD que `plan_status = 'trialing'` y `trial_ends_at` ≈ hoy + 14 días; luego `GET /payments/subscription` con su token → `status: "trialing"`, `trialDaysLeft: 14`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/modules/auth/auth.service.ts
@@ -957,7 +957,7 @@ git commit -m "feat: start 14-day trial at registration; session limits from pla
 - Consumes: `getSubscriptionState` (Task 3), `PLANS`, `PlanName` (Task 2).
 - Produces: `assertConnectionLimit(userId: string): Promise<void>` y `assertMonthlyPostLimit(userId: string): Promise<void>` en `subscriptions.service.ts`.
 
-- [ ] **Step 1: Añadir helpers de límite a `subscriptions.service.ts`**
+- [x] **Step 1: Añadir helpers de límite a `subscriptions.service.ts`**
 
 ```ts
 import { PLANS, PlanName } from '../../config/plans';
@@ -1014,7 +1014,7 @@ export async function assertMonthlyPostLimit(userId: string): Promise<void> {
 }
 ```
 
-- [ ] **Step 2: Aplicar en `platforms.service.ts`**
+- [x] **Step 2: Aplicar en `platforms.service.ts`**
 
 Import:
 
@@ -1031,7 +1031,7 @@ Añadir `await assertConnectionLimit(userId);` como **primera línea** del cuerp
 
 Limitación aceptada (documentada aquí, no requiere código): un flujo que inserta varias conexiones de golpe (varias páginas FB) puede excederse en unas pocas — el chequeo es previo a la operación, no por fila.
 
-- [ ] **Step 3: Aplicar en `posts.service.ts`**
+- [x] **Step 3: Aplicar en `posts.service.ts`**
 
 Import:
 
@@ -1055,7 +1055,7 @@ En `updatePost`, justo después de `const current = await getById(id, userId);` 
   }
 ```
 
-- [ ] **Step 4: Verificar**
+- [x] **Step 4: Verificar**
 
 ```bash
 npx tsc --noEmit && npm test
@@ -1063,7 +1063,7 @@ npx tsc --noEmit && npm test
 
 Funcional (opcional pero recomendado): con un usuario de prueba, bajar temporalmente `postsPerMonth` de `pro` a 1 en `plans.ts`, crear un post scheduled (ok) y un segundo (→ 403 `PLAN_LIMIT_REACHED`); revertir `plans.ts`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/modules/payments/subscriptions.service.ts src/modules/platforms/platforms.service.ts src/modules/posts/posts.service.ts
@@ -1082,7 +1082,7 @@ git commit -m "feat: enforce per-plan connection and monthly post limits"
 - Consumes: `request.subscription` (Task 3), `PLANS`, `isPlanName` (Task 2).
 - Produces: `checkTokenLimit(userId: string, plan: string | null)` — firma cambia de `plan: string` a `plan: string | null`.
 
-- [ ] **Step 1: Comprobar los call sites de `checkTokenLimit`**
+- [x] **Step 1: Comprobar los call sites de `checkTokenLimit`**
 
 ```bash
 grep -rn "checkTokenLimit" src/
@@ -1090,7 +1090,7 @@ grep -rn "checkTokenLimit" src/
 
 Expected: solo `token.service.ts` (definición) y `ai.routes.ts` (guard). Si aparece otro, adaptarlo igual que el guard.
 
-- [ ] **Step 2: `tokenLimitGuard` usa el plan efectivo**
+- [x] **Step 2: `tokenLimitGuard` usa el plan efectivo**
 
 En `ai.routes.ts`, `requireSubscription` ya corre antes (Task 3), así que `request.subscription` está poblado. Reemplazar el guard:
 
@@ -1111,7 +1111,7 @@ async function tokenLimitGuard(request: FastifyRequest, reply: FastifyReply): Pr
 
 Eliminar el import de `getMe` si queda sin uso en el archivo.
 
-- [ ] **Step 3: Fallback del límite en `token.service.ts`**
+- [x] **Step 3: Fallback del límite en `token.service.ts`**
 
 Reemplazar `checkTokenLimit`:
 
@@ -1135,7 +1135,7 @@ export async function checkTokenLimit(
 }
 ```
 
-- [ ] **Step 4: Verificar y commit**
+- [x] **Step 4: Verificar y commit**
 
 ```bash
 npx tsc --noEmit && npm test
@@ -1157,7 +1157,7 @@ git commit -m "feat: AI token limits fall back to plan defaults using effective 
 - Consumes: patrón `isDue`/`markDone` y constante `DAY` de `maintenance.ts`; `send()` de `email.ts`.
 - Produces: `sendTrialEndingSoonEmail(toEmail, opts: { name?: string; daysLeft: number })`, `sendTrialExpiredEmail(toEmail, opts: { name?: string })`. **Ambas lanzan si el envío falla** (a diferencia de las demás funciones de `email.ts`, que tragan el error) — el cron necesita saberlo para no marcar el flag.
 
-- [ ] **Step 1: Crear `src/lib/emails/TrialEndingSoon.tsx`**
+- [x] **Step 1: Crear `src/lib/emails/TrialEndingSoon.tsx`**
 
 ```tsx
 import * as React from 'react';
@@ -1252,7 +1252,7 @@ const footer: React.CSSProperties = { color: '#666666', fontSize: '12px', lineHe
 const footerLink: React.CSSProperties = { color: '#666666', textDecoration: 'underline' };
 ```
 
-- [ ] **Step 2: Crear `src/lib/emails/TrialExpired.tsx`**
+- [x] **Step 2: Crear `src/lib/emails/TrialExpired.tsx`**
 
 Misma estructura y estilos que `TrialEndingSoon.tsx` (copiar las constantes de estilo tal cual); cambia el componente:
 
@@ -1316,7 +1316,7 @@ export function TrialExpired({ name, subscribeUrl }: TrialExpiredProps) {
 
 (Imports y constantes de estilo idénticos a `TrialEndingSoon.tsx`, sin `daysLeft`.)
 
-- [ ] **Step 3: Añadir senders a `src/lib/email.ts`**
+- [x] **Step 3: Añadir senders a `src/lib/email.ts`**
 
 Imports junto a los demás templates:
 
@@ -1354,7 +1354,7 @@ export async function sendTrialExpiredEmail(
 }
 ```
 
-- [ ] **Step 4: Tarea `trial-emails` en `src/jobs/maintenance.ts`**
+- [x] **Step 4: Tarea `trial-emails` en `src/jobs/maintenance.ts`**
 
 Import:
 
@@ -1438,7 +1438,7 @@ En `main()`, añadir tras el bloque de `cleanup-auth`:
     }
 ```
 
-- [ ] **Step 5: Verificar**
+- [x] **Step 5: Verificar**
 
 ```bash
 npx tsc --noEmit && npm test
@@ -1452,7 +1452,7 @@ npx tsx src/jobs/maintenance.ts
 
 Expected: log `[maintenance] trial emails: 1 reminders, 0 expirations`, el email llega, y `trial_reminder_sent = 1` en BD. Segunda ejecución (borrar la fila `trial-emails` de `_cron_runs` primero): `0 reminders` (no duplica).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/lib/emails/TrialEndingSoon.tsx src/lib/emails/TrialExpired.tsx src/lib/email.ts src/jobs/maintenance.ts
