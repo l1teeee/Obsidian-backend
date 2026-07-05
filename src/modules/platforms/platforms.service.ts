@@ -5,6 +5,7 @@ import { env } from '../../config/env';
 import { cache } from '../../lib/cache';
 import { encryptToken, decryptToken } from '../../lib/crypto';
 import { sendPlatformConnectedEmail } from '../../lib/email';
+import { assertConnectionLimit } from '../payments/subscriptions.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -157,6 +158,8 @@ async function resolveIgAccountId(
 }
 
 export async function linkInstagramFromExistingPages(userId: string, workspaceId?: string | null): Promise<number> {
+  await assertConnectionLimit(userId);
+
   const [rows] = await pool.query<SocialConnectionRow[]>(
     `SELECT id, user_id, platform, platform_account_id, account_name, account_picture,
             access_token, token_expires_at, page_id, page_name, ig_business_id, scopes
@@ -256,6 +259,8 @@ export async function linkInstagramFromExistingPages(userId: string, workspaceId
  * Uses the same Facebook App ID/Secret (add the Instagram product to the Meta app).
  */
 export async function handleInstagramDirectCallback(userId: string, code: string, workspaceId?: string | null): Promise<void> {
+  await assertConnectionLimit(userId);
+
   // 1. Exchange code for short-lived token
   const shortRes = await fetch('https://api.instagram.com/oauth/access_token', {
     method:  'POST',
@@ -395,6 +400,8 @@ export async function deleteConnection(id: string, userId: string): Promise<void
  * 4. Upsert one row per FB page (platform=facebook) and one per IG account (platform=instagram)
  */
 export async function selectFacebookPage(userId: string, pageId: string, workspaceId?: string | null): Promise<void> {
+  await assertConnectionLimit(userId);
+
   type PendingRow = SocialConnectionRow & { user_access_token?: string | null };
 
   const [rows] = await pool.query<PendingRow[]>(
@@ -500,6 +507,8 @@ export async function selectFacebookPage(userId: string, pageId: string, workspa
 }
 
 export async function handleFacebookCallback(userId: string, code: string, grantedScopes?: string, workspaceId?: string | null): Promise<{ needsPageSelection: boolean }> {
+  await assertConnectionLimit(userId);
+
   // 1. Short-lived token
   const shortToken = await exchangeCodeForToken(code);
 

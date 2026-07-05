@@ -5,6 +5,7 @@ import { decryptToken, encryptToken } from '../../lib/crypto';
 import { S3_PUBLIC_URL }  from '../../lib/s3';
 import { promoteToPost, deleteS3Objects } from '../media/media.service';
 import { sendPostCreatedEmail } from '../../lib/email';
+import { assertMonthlyPostLimit } from '../payments/subscriptions.service';
 
 // ─── Facebook publishing ──────────────────────────────────────────────────────
 
@@ -511,6 +512,9 @@ export async function createPost(userId: string, data: CreatePostData): Promise<
   const mediaUrlsJson = data.media_urls ? JSON.stringify(data.media_urls) : null;
   const status        = data.status ?? 'draft';
 
+  // Drafts are free — the monthly limit counts scheduled/published posts
+  if (status !== 'draft') await assertMonthlyPostLimit(userId);
+
   await pool.query<ResultSetHeader>(
     `INSERT INTO posts (id, user_id, platform, post_type, caption, media_urls, page_id, scheduled_at, status)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -595,6 +599,11 @@ export async function updatePost(id: string, userId: string, data: UpdatePostDat
 
   // Fetch current post — validates ownership and provides old media_urls for cleanup
   const current = await getById(id, userId);
+
+  // Promoting a draft to scheduled/published consumes monthly quota
+  if (data.status !== undefined && data.status !== 'draft' && current.status === 'draft') {
+    await assertMonthlyPostLimit(userId);
+  }
 
   if (fields.length === 0) return current;
 
