@@ -1,4 +1,4 @@
-import { ResultSetHeader } from 'mysql2';
+import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
 import { env } from '../../config/env';
 import { PlanName } from '../../config/plans';
@@ -203,4 +203,63 @@ export async function handleWebhook(
       // Unhandled event type — acknowledge receipt, take no action
       break;
   }
+}
+
+interface SubIdRow extends RowDataPacket {
+  paypal_subscription_id: string | null;
+}
+
+export async function cancelSubscription(userId: string): Promise<void> {
+  const [rows] = await pool.query<SubIdRow[]>(
+    'SELECT paypal_subscription_id FROM users WHERE id = ? LIMIT 1',
+    [userId],
+  );
+  const subId = rows[0]?.paypal_subscription_id;
+  if (!subId) {
+    throw Object.assign(new Error('No subscription to cancel'), {
+      statusCode: 404,
+      errorCode:  'NO_SUBSCRIPTION',
+    });
+  }
+
+  const token = await getAccessToken();
+
+  // Capture the end of the already-paid period before cancelling —
+  // the user keeps access until then.
+  let paidUntil: Date | null = null;
+  const detailRes = await fetch(
+    `${env.PAYPAL_API_BASE}/v1/billing/subscriptions/${encodeURIComponent(subId)}`,
+    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } },
+  );
+  if (detailRes.ok) {
+    const sub = await detailRes.json() as PaypalSubscriptionResponse;
+    if (sub.billing_info?.next_billing_time) {
+      paidUntil = new Date(sub.billing_info.next_billing_time);
+    }
+  }
+
+  // Cancel at PayPal FIRST: if this fails we must not mark the user cancelled
+  // while PayPal keeps charging them.
+  const cancelRes = await fetch(
+    `${env.PAYPAL_API_BASE}/v1/billing/subscriptions/${encodeURIComponent(subId)}/cancel`,
+    {
+      method:  'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ reason: 'Cancelled by the user from the app' }),
+    },
+  );
+  if (!cancelRes.ok) {
+    throw Object.assign(new Error('PayPal refused to cancel the subscription'), {
+      statusCode: 502,
+      errorCode:  'PAYPAL_CANCEL_FAILED',
+    });
+  }
+
+  await pool.query<ResultSetHeader>(
+    `UPDATE users
+        SET plan_status = 'cancelled',
+            paid_until  = COALESCE(?, paid_until)
+      WHERE id = ?`,
+    [paidUntil, userId],
+  );
 }

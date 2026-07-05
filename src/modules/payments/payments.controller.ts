@@ -1,5 +1,7 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
 import * as paymentsService from './payments.service';
+import { getSubscriptionState } from './subscriptions.service';
+import { PLANS } from '../../config/plans';
 
 type ConfirmSubscriptionBody = {
   subscriptionId: string;
@@ -12,6 +14,44 @@ export async function confirmSubscriptionHandler(
   const userId = (request.user as { id: string }).id;
   const body   = request.body as ConfirmSubscriptionBody;
   await paymentsService.confirmSubscription(userId, body.subscriptionId);
+  reply.send({ success: true, data: null });
+}
+
+export async function getSubscriptionHandler(
+  request: FastifyRequest,
+  reply:   FastifyReply,
+): Promise<void> {
+  const userId = (request.user as { id: string }).id;
+  const state  = await getSubscriptionState(userId);
+  const limits = state.effectivePlan
+    ? {
+        connections:      PLANS[state.effectivePlan].maxConnections,
+        postsPerMonth:    PLANS[state.effectivePlan].postsPerMonth,
+        aiTokensPerMonth: PLANS[state.effectivePlan].aiTokensPerMonth,
+        sessions:         PLANS[state.effectivePlan].maxSessions,
+      }
+    : null;
+
+  reply.send({
+    success: true,
+    data: {
+      status:        state.status,
+      plan:          state.plan,
+      effectivePlan: state.effectivePlan,
+      trialEndsAt:   state.trialEndsAt?.toISOString() ?? null,
+      trialDaysLeft: state.trialDaysLeft,
+      paidUntil:     state.paidUntil?.toISOString() ?? null,
+      limits,
+    },
+  });
+}
+
+export async function cancelSubscriptionHandler(
+  request: FastifyRequest,
+  reply:   FastifyReply,
+): Promise<void> {
+  const userId = (request.user as { id: string }).id;
+  await paymentsService.cancelSubscription(userId);
   reply.send({ success: true, data: null });
 }
 
