@@ -10,7 +10,7 @@ export interface UserProfile {
   role:              string | null;
   country:           string | null;
   avatar_url:        string | null;
-  plan:              UserPlan;
+  plan:              UserPlan | null;
   is_admin:          boolean;
   is_superadmin:     boolean;
   profile_completed: boolean;
@@ -32,7 +32,7 @@ export async function getMe(userId: string): Promise<UserProfile> {
   if (!user) throw appError('NOT_FOUND', 'User not found', 404);
   return {
     ...user,
-    plan:              (user.plan ?? 'starter') as UserPlan,
+    plan:              user.plan ?? null,
     is_admin:          Boolean(user.is_admin),
     is_superadmin:     Boolean(user.is_superadmin),
     profile_completed: Boolean(user.profile_completed),

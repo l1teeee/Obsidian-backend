@@ -2,13 +2,14 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { inspireHandler, generateImageHandler, editImageHandler, suggestTimeHandler, analyzeImageHandler, carouselSlidesHandler } from './ai.controller';
 import { inspireSchema, generateImageSchema, editImageSchema, suggestTimeSchema, analyzeImageSchema, carouselSlidesSchema } from './ai.schema';
 import { checkTokenLimit } from '../admin/token.service';
-import { getMe } from '../users/users.service';
 
 const AI_LIMIT = { max: 20, timeWindow: '1 minute' };
 
 async function tokenLimitGuard(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-  const user = await getMe(request.user.id);
-  const { allowed, used, limit } = await checkTokenLimit(request.user.id, user.plan);
+  // requireSubscription ran before this hook, so subscription is populated.
+  // Trial users get the trial tier's allowance instead of "no plan = unlimited".
+  const plan = request.subscription?.effectivePlan ?? null;
+  const { allowed, used, limit } = await checkTokenLimit(request.user.id, plan);
   if (!allowed) {
     reply.status(429).send({
       success: false,

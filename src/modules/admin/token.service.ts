@@ -1,5 +1,6 @@
 import { RowDataPacket } from 'mysql2';
 import { pool } from '../../config/db';
+import { PLANS, isPlanName } from '../../config/plans';
 
 export interface TokenStats {
   total_tokens:       number;
@@ -232,12 +233,16 @@ export async function getUserMonthlyUsage(userId: string): Promise<number> {
 }
 
 export async function checkTokenLimit(
-  userId: string, plan: string,
+  userId: string, plan: string | null,
 ): Promise<{ allowed: boolean; used: number; limit: number }> {
   const [limitRows] = await pool.query<Array<{ monthly_limit: number } & RowDataPacket>>(
     'SELECT monthly_limit FROM token_limits WHERE plan = ?', [plan],
   );
-  const limit = Number(limitRows[0]?.monthly_limit ?? 0);
+  // An explicit admin-set limit wins; otherwise fall back to the plan's default.
+  // A limit of 0 (explicit or absent) means unlimited — preserved semantics.
+  const explicit = limitRows[0] ? Number(limitRows[0].monthly_limit) : null;
+  const fallback = isPlanName(plan) ? PLANS[plan].aiTokensPerMonth : null;
+  const limit    = explicit ?? fallback ?? 0;
   if (limit === 0) return { allowed: true, used: 0, limit: 0 };
   const used = await getUserMonthlyUsage(userId);
   return { allowed: used < limit, used, limit };
