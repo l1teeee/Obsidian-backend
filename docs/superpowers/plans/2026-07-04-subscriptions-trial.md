@@ -1465,7 +1465,7 @@ git commit -m "feat: trial reminder and expiry emails via daily maintenance task
 
 **Files:** ninguno (solo verificación; arreglar lo que falle).
 
-- [ ] **Step 1: Suite completa estática**
+- [x] **Step 1: Suite completa estática**
 
 ```bash
 npx tsc --noEmit && npm test && npm run build
@@ -1473,7 +1473,7 @@ npx tsc --noEmit && npm test && npm run build
 
 Expected: todo verde.
 
-- [ ] **Step 2: Flujo completo con servidor dev**
+- [x] **Step 2: Flujo completo con servidor dev**
 
 Con `npm run dev` corriendo y un usuario de prueba recién registrado:
 
@@ -1485,7 +1485,7 @@ Con `npm run dev` corriendo y un usuario de prueba recién registrado:
 6. Simular cancelación con período pagado: `UPDATE users SET plan_status = 'cancelled', paid_until = NOW() + INTERVAL 200 DAY WHERE email = '<test>';` → `POST /posts` → 200; `status: "cancelled"`.
 7. Período pagado vencido: `UPDATE users SET paid_until = NOW() - INTERVAL 1 DAY WHERE email = '<test>';` → `POST /posts` → **402**.
 
-- [ ] **Step 3: Flujo PayPal sandbox (si hay credenciales configuradas)**
+- [ ] **Step 3: Flujo PayPal sandbox (si hay credenciales configuradas)** — PENDIENTE: no hay credenciales PayPal en `.env`; queda para el usuario.
 
 Crear en el dashboard sandbox de PayPal 3 planes anuales, poner sus IDs en `.env` (`PAYPAL_PLAN_ID_STARTER/PRO/ENTERPRISE`), aprobar una suscripción de prueba desde el frontend o con la API, y:
 
@@ -1502,6 +1502,6 @@ curl -s -X POST http://localhost:3000/payments/paypal/subscription/cancel \
 
 Si no hay credenciales sandbox, dejar este paso documentado como pendiente para el usuario.
 
-- [ ] **Step 4: Reportar resultados al usuario**
+- [x] **Step 4: Reportar resultados al usuario**
 
 Resumen de qué se verificó, qué quedó pendiente (p. ej. sandbox PayPal) y recordatorio de las env vars nuevas que debe configurar en producción: `PAYPAL_PLAN_ID_STARTER`, `PAYPAL_PLAN_ID_PRO`, `PAYPAL_PLAN_ID_ENTERPRISE`.
