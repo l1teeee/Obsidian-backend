@@ -7,15 +7,9 @@ import { pool } from '../../config/db';
 import { env } from '../../config/env';
 import { uid } from '../../lib/uid';
 import { sendLoginNotification, sendVerificationEmail, sendPasswordResetEmail } from '../../lib/email';
+import { PLANS, TRIAL_PLAN, TRIAL_DAYS, isPlanName } from '../../config/plans';
 
 const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET);
-
-// Sessions allowed per plan when max_sessions is not explicitly set
-const PLAN_SESSION_LIMITS: Record<string, number> = {
-  starter:    2,
-  pro:        5,
-  enterprise: 10,
-};
 
 interface UserRow extends RowDataPacket {
   id:                           string;
@@ -117,8 +111,9 @@ export async function register(
   const verificationCode = String(Math.floor(100000 + Math.random() * 900000)); // 6-digit code
 
   await pool.query<ResultSetHeader>(
-    'INSERT INTO users (id, email, password_hash, email_verification_token) VALUES (?, ?, ?, ?)',
-    [id, email, passwordHash, verificationCode],
+    `INSERT INTO users (id, email, password_hash, email_verification_token, plan_status, trial_ends_at)
+     VALUES (?, ?, ?, ?, 'trialing', DATE_ADD(NOW(), INTERVAL ? DAY))`,
+    [id, email, passwordHash, verificationCode, TRIAL_DAYS],
   );
 
   sendVerificationEmail(email, verificationCode);
@@ -206,8 +201,10 @@ export async function login(
     return { ...tokens, isFirstLogin: Boolean(user.first_login), profileCompleted };
   }
 
-  // max_sessions overrides the plan default when explicitly set
-  const maxSessions = user.max_sessions ?? PLAN_SESSION_LIMITS[user.plan ?? ''] ?? 1;
+  // Explicit max_sessions overrides the plan default. Users without a paid
+  // plan (trial or blocked) get the trial tier's session allowance.
+  const planSessions = isPlanName(user.plan) ? PLANS[user.plan].maxSessions : PLANS[TRIAL_PLAN].maxSessions;
+  const maxSessions  = user.max_sessions ?? planSessions;
 
   // Check active session count
   const [activeSessions] = await pool.query<RefreshTokenRow[]>(
@@ -365,8 +362,9 @@ export async function loginWithGoogle(code: string, deviceInfo?: string): Promis
     profileCompleted = false;
     const placeholderHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), env.BCRYPT_ROUNDS);
     await pool.query<ResultSetHeader>(
-      'INSERT INTO users (id, email, password_hash, name, email_verified, is_active) VALUES (?, ?, ?, ?, 1, 1)',
-      [userId, email, placeholderHash, name ?? null],
+      `INSERT INTO users (id, email, password_hash, name, email_verified, is_active, plan_status, trial_ends_at)
+       VALUES (?, ?, ?, ?, 1, 1, 'trialing', DATE_ADD(NOW(), INTERVAL ? DAY))`,
+      [userId, email, placeholderHash, name ?? null, TRIAL_DAYS],
     );
   }
 
