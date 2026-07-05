@@ -7,6 +7,7 @@ const WRITE_LIMIT = { max: 20, timeWindow: '1 minute' };
 
 export default async function workspacesRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', fastify.requireSubscription);
 
   fastify.get('/',      {                              config: { rateLimit: READ_LIMIT  } }, handlers.listHandler);
   fastify.post('/',     { schema: createWorkspaceSchema, config: { rateLimit: WRITE_LIMIT } }, handlers.createHandler);

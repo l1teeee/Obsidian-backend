@@ -9,6 +9,7 @@ import jwtPlugin   from '@fastify/jwt';
 import { env }  from './config/env';
 import { pool } from './config/db';
 import authenticatePlugin from './plugins/jwt.plugin';
+import subscriptionPlugin from './plugins/subscription.plugin';
 import sanitizePlugin     from './plugins/sanitize.plugin';
 import auditPlugin        from './plugins/audit.plugin';
 import authRoutes         from './modules/auth/auth.routes';
@@ -91,6 +92,7 @@ export function buildApp() {
   // ── JWT ───────────────────────────────────────────────────────────────────
   fastify.register(jwtPlugin, { secret: env.JWT_SECRET });
   fastify.register(authenticatePlugin);
+  fastify.register(subscriptionPlugin);
 
   // ── Input sanitization ────────────────────────────────────────────────────
   // Runs preValidation on every request:

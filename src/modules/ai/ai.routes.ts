@@ -19,6 +19,7 @@ async function tokenLimitGuard(request: FastifyRequest, reply: FastifyReply): Pr
 
 export default async function aiRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', fastify.requireSubscription);
   fastify.addHook('preHandler', tokenLimitGuard);
 
   fastify.post('/inspire',        { schema: inspireSchema,       config: { rateLimit: AI_LIMIT } }, inspireHandler      );

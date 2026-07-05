@@ -4,6 +4,7 @@ import { getAiSettingsSchema, upsertAiSettingsSchema } from './ai-settings.schem
 
 export default async function aiSettingsRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', fastify.requireSubscription);
 
   fastify.get( '/:workspaceId', { schema: getAiSettingsSchema    }, getHandler    );
   fastify.put( '/:workspaceId', { schema: upsertAiSettingsSchema }, upsertHandler );

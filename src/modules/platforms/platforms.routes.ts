@@ -18,6 +18,8 @@ type CallbackQs = { Querystring: { code?: string; state?: string; error?: string
 type FbCallbackQs = { Querystring: { code?: string; state?: string; error?: string; error_description?: string; granted_scopes?: string } };
 
 export default async function platformsRoutes(fastify: FastifyInstance) {
+  fastify.addHook('preHandler', fastify.requireSubscription);
+
   fastify.get<WsQuery>(
     '/',
     { onRequest: [fastify.authenticate], config: { rateLimit: API_LIMIT } },

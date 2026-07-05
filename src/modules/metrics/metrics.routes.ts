@@ -4,6 +4,8 @@ import { getDashboardSummary, getFacebookSummary, getFacebookPosts, getFacebookP
 const METRICS_LIMIT = { max: 30, timeWindow: '1 minute' };
 
 export default async function metricsRoutes(fastify: FastifyInstance) {
+  fastify.addHook('preHandler', fastify.requireSubscription);
+
   fastify.get('/dashboard/summary',        { onRequest: [fastify.authenticate], config: { rateLimit: METRICS_LIMIT } }, getDashboardSummary);
   fastify.get('/facebook/summary',         { onRequest: [fastify.authenticate], config: { rateLimit: METRICS_LIMIT } }, getFacebookSummary);
   fastify.get('/facebook/posts',           { onRequest: [fastify.authenticate], config: { rateLimit: METRICS_LIMIT } }, getFacebookPosts);

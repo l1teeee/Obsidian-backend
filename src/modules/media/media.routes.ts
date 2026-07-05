@@ -7,6 +7,7 @@ export default async function mediaRoutes(fastify: FastifyInstance): Promise<voi
   await fastify.register(multipart);
 
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', fastify.requireSubscription);
 
   // Server-side upload: backend receives file, stores in S3
   fastify.post('/upload', {

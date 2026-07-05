@@ -13,6 +13,7 @@ const WRITE_LIMIT = { max: 30,  timeWindow: '1 minute' };
 
 const postsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', fastify.requireSubscription);
 
   fastify.get('/',    { schema: getPostsSchema,    config: { rateLimit: READ_LIMIT  } }, controller.getPostsHandler);
   fastify.get('/:id', { schema: getPostByIdSchema, config: { rateLimit: READ_LIMIT  } }, controller.getPostByIdHandler);
