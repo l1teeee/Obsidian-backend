@@ -122,7 +122,13 @@ Quedan **sin** el decorador (solo `authenticate` donde aplique): `auth`, `users`
   el mes calendario en curso → `403 PLAN_LIMIT_REACHED`.
 - **IA/mes**: el límite del plan actúa como valor por defecto cuando el admin no ha
   asignado un límite explícito en la infraestructura existente de `token.service`
-  (se valida el encaje exacto durante la implementación; no se crea contador paralelo).
+  (no se crea contador paralelo). La infraestructura existente cuenta **tokens**,
+  no créditos: los valores por plan se expresan como `aiTokensPerMonth`
+  (50k / 500k / ilimitado, ajustables en `plans.ts`).
+- **Corrección de seguridad adicional** (descubierta al planificar): se elimina
+  `PATCH /users/me/plan`, que permitía a cualquier usuario auto-asignarse un plan
+  sin pagar. `users.plan` pasa a escribirse solo desde los flujos verificados con
+  PayPal (confirmación y webhook).
 
 ## Endpoints
 
